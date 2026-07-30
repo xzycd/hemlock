@@ -29,6 +29,15 @@ def score_package(pkg: Package, findings: list[Finding]) -> Verdict:
     if not findings:
         return Verdict(pkg, [], 0, 0, 1.0, [], {})
 
+    ordered = sorted(findings, key=lambda f: (not f.rule.certain, -f.rule.weight, f.rule.id))
+
+    # A certain finding is not a signal to be weighed against other signals.
+    # If a published report names this exact version as malware, the score is
+    # 100 and the arithmetic below has nothing useful to add.
+    if any(f.rule.certain for f in findings):
+        categories = sorted({f.rule.category for f in findings})
+        return Verdict(pkg, ordered, 100, 100, 1.0, categories, {}, certain=True)
+
     by_category: dict[str, list[int]] = {}
     for f in findings:
         by_category.setdefault(f.rule.category, []).append(f.rule.weight)
@@ -42,7 +51,6 @@ def score_package(pkg: Package, findings: list[Finding]) -> Verdict:
     multiplier = 1.0 + CORROBORATION * (len(parts) - 1)
     total = min(100, round(base * multiplier))
 
-    ordered = sorted(findings, key=lambda f: (-f.rule.weight, f.rule.id))
     return Verdict(pkg, ordered, total, base, multiplier, sorted(parts), parts)
 
 
@@ -51,6 +59,8 @@ def arithmetic(v: Verdict, unicode: bool = True) -> str:
     if not v.findings:
         return "0"
     times, arrow = ("×", "→") if unicode else ("x", "->")
+    if v.certain:
+        return "reported malicious, so no score was calculated"
     terms = " + ".join(f"{cat} {score}" for cat, score in sorted(v.parts.items(), key=lambda kv: -kv[1]))
     if v.multiplier == 1.0:
         return f"{terms} {arrow} {v.score}"

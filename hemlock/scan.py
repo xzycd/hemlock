@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, field
 
 from . import npm, pypi, rules  # noqa: F401  (importing rules registers them)
+from .graph import Graph
+from .graph import build as build_graph
 from .model import Context, Finding, Package, Verdict, active_rules
 from .policy import Policy
 from .score import score_package
@@ -20,10 +23,19 @@ class Report:
     suppressed: int = 0
     online: bool = False
     warnings: list[str] = field(default_factory=list)
+    http_calls: int = 0
+    cache_hits: int = 0
+    baselined: int = 0
+    elapsed: float = 0.0
+    graph: Graph | None = None
 
     @property
     def flagged(self) -> list[Verdict]:
         return [v for v in self.verdicts if v.score > 0]
+
+    @property
+    def malware(self) -> list[Verdict]:
+        return [v for v in self.verdicts if v.certain]
 
     def worst(self) -> str:
         order = ["clean", "low", "medium", "high", "critical"]
@@ -34,6 +46,13 @@ class Report:
         for v in self.flagged:
             out[v.severity] += 1
         return out
+
+
+def _stage(progress, label: str):
+    """Give a progress callback a name for the phase it is reporting on."""
+    if progress is None:
+        return None
+    return lambda done, total: progress(label, done, total)
 
 
 def collect(root: str) -> tuple[list[str], list[Package]]:
@@ -60,21 +79,47 @@ def _dedupe(packages: list[Package]) -> list[Package]:
 
 
 def run(root: str, policy: Policy, online: bool = False, progress=None) -> Report:
+    started = time.perf_counter()
     manifests, packages = collect(root)
     report = Report(root=root, manifests=manifests, packages=packages, online=online)
+    report.graph = build_graph(root, packages)
 
     ctx = Context(root=root, online=online, packages=packages, fresh_days=policy.fresh_days)
 
     if online and packages:
+        from .http import Http
+        from .intel import Osv
         from .registry import Registry
 
-        reg = Registry()
-        ctx.registry = reg
-        reg.enrich(packages, progress=progress)
-        if reg.failures:
-            report.warnings.append(f"{len(reg.failures)} registry lookups failed; those rules were skipped")
+        http = Http()
+        ctx.registry = Registry(http)
+        # OSV goes first: it is one batched request for the whole list, and a
+        # package already reported as malware makes everything else moot.
+        Osv(http).enrich(packages, progress=_stage(progress, "checking osv.dev"))
+        ctx.registry.enrich(packages, progress=_stage(progress, "querying registries"))
+        report.http_calls, report.cache_hits = http.calls, http.hits
+        if http.failures:
+            report.warnings.append(
+                f"{len(http.failures)} lookups failed, so some online rules were skipped "
+                f"(first: {http.failures[0]})"
+            )
 
+    run_rules(report, policy, online, packages, ctx)
+    report.elapsed = time.perf_counter() - started
+    return report
+
+
+def run_rules(report: Report, policy: Policy, online: bool,
+              packages: list[Package], ctx: Context | None = None) -> None:
+    """Apply every active rule to every package and fill in the verdicts.
+
+    Shared with `hemlock diff`, which runs the same rules over a much
+    smaller list.
+    """
+    ctx = ctx or Context(root=report.root, online=online, packages=packages,
+                         fresh_days=policy.fresh_days)
     checks = list(active_rules(online, policy.disable))
+
     for pkg in packages:
         findings: list[Finding] = []
         # A manifest entry stands in for a file, so only the configuration
@@ -97,4 +142,3 @@ def run(root: str, policy: Policy, online: bool = False, progress=None) -> Repor
     report.verdicts.sort(key=lambda v: (-v.score, v.package.name))
     for ig in policy.expired:
         report.warnings.append(f"expired suppression: {ig.rule} on {ig.package} (expired {ig.expires})")
-    return report

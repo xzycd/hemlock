@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hemlock-scan"
-version = "0.1.0"
+version = "0.3.0"
 description = "Supply-chain scanner for npm and PyPI. Flags packages that behave like an attack, not just ones with a CVE."
 readme = "README.md"
 requires-python = ">=3.11"

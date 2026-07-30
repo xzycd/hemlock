@@ -20,7 +20,8 @@ import unicodedata
 from datetime import UTC, datetime, timedelta
 
 from .data import AFFIXES, CREDENTIAL_PATHS, HOMOGLYPHS, POPULAR
-from .model import Context, Package, rule
+from .model import RULES, Context, Package, rule
+from .provenance import describe
 from .pypi import normalize
 
 # --------------------------------------------------------------------------
@@ -628,33 +629,14 @@ def fresh_release(pkg: Package, ctx: Context):
 def publisher_change(pkg: Package, ctx: Context):
     current = pkg.meta.get("publisher")
     history = pkg.meta.get("prior_publishers") or []
-    if current and history and current not in history:
-        yield f'published by "{current}"; previous releases by {", ".join(sorted(set(history))[:3])}'
+    if not current or not history or current in history:
+        return
+    others = ", ".join(history[:3]) + (f" and {len(history) - 3} others" if len(history) > 3 else "")
+    yield f'published by "{current}", who had not published this package before; earlier releases by {others}'
 
 
 @rule(
     "HEM503",
-    title="Release is unsigned",
-    category="registry",
-    weight=15,
-    online=True,
-    explain="""
-    The registry has no signature for this artifact. npm signs published
-    tarballs and can also carry a provenance attestation linking a release
-    back to the CI run and commit that built it.
-
-    Unsigned means older, or published from a laptop. It is not evidence of
-    anything. It does mean that if you later need to prove what was in a
-    release, there is nothing to check it against.
-    """,
-)
-def unsigned_release(pkg: Package, ctx: Context):
-    if pkg.ecosystem == "npm" and pkg.meta.get("signed") is False:
-        yield "no registry signature or provenance attestation"
-
-
-@rule(
-    "HEM504",
     title="Deprecated or withdrawn",
     category="registry",
     weight=25,
@@ -664,7 +646,7 @@ def unsigned_release(pkg: Package, ctx: Context):
     the deprecation message is where a compromise gets announced, so read it
     rather than just noting it.
 
-    A yanked version that is still in your lockfile means your installs are
+    A yanked version still sitting in your lockfile means your installs are
     pinned to something its own authors have retracted.
     """,
 )
@@ -676,7 +658,7 @@ def deprecated_or_yanked(pkg: Package, ctx: Context):
 
 
 @rule(
-    "HEM505",
+    "HEM504",
     title="Almost nobody installs this",
     category="registry",
     weight=20,
@@ -698,7 +680,7 @@ def low_reach(pkg: Package, ctx: Context):
 
 
 @rule(
-    "HEM506",
+    "HEM505",
     title="No source repository",
     category="registry",
     weight=15,
@@ -718,47 +700,19 @@ def repo_missing(pkg: Package, ctx: Context):
 
 
 @rule(
-    "HEM507",
-    title="Known vulnerability reported for this version",
-    category="registry",
-    weight=30,
-    online=True,
-    explain="""
-    A published advisory covers the exact version installed. This is the one
-    check here that overlaps with a conventional vulnerability scanner, and it
-    is included because it is free: PyPI returns advisories inline with
-    package metadata.
-
-    Known vulnerabilities are the easy half of the problem. Everything else in
-    this tool exists for the packages that no advisory has caught up with yet.
-    """,
-)
-def known_vulnerable(pkg: Package, ctx: Context):
-    seen = set()
-    for adv in pkg.meta.get("vulnerabilities", []):
-        ids = adv.get("aliases") or [adv.get("id", "advisory")]
-        # The same advisory often arrives twice under different sources.
-        if ids[0] in seen:
-            continue
-        seen.add(ids[0])
-        yield f"{ids[0]}: {_clip(adv.get('summary') or adv.get('details') or '', 66)}"
-        if len(seen) == 3:
-            return
-
-
-@rule(
-    "HEM508",
+    "HEM506",
     title="Release size jumped sharply",
     category="registry",
     weight=25,
     online=True,
     explain="""
-    This version is several times larger than the one before it. Packages grow,
-    but a utility library that triples in size in a patch release has gained
-    something, and it is worth knowing what.
+    This version is several times larger than the one before it. Packages
+    grow, but a utility library that triples in size in a patch release has
+    gained something, and it is worth knowing what.
 
-    Bundled payloads are heavier than the code they hide in. The size delta is
-    often visible in registry metadata before anyone has unpacked the tarball.
+    Bundled payloads are heavier than the code they hide in, and the size
+    delta shows up in registry metadata before anyone has unpacked the
+    tarball.
     """,
 )
 def size_jump(pkg: Package, ctx: Context):
@@ -769,3 +723,185 @@ def size_jump(pkg: Package, ctx: Context):
 
 def _kb(n: int) -> str:
     return f"{n / 1024:.0f} KB" if n < 1024 * 1024 else f"{n / 1048576:.1f} MB"
+
+
+# --------------------------------------------------------------------------
+# build provenance (requires --online)
+# --------------------------------------------------------------------------
+
+# Both registries supported attested publishing well before this date, so a
+# release made after it had the option available and did not take it. Older
+# releases predate the tooling and are not judged for it.
+PROVENANCE_EXPECTED_FROM = datetime(2025, 1, 1, tzinfo=UTC)
+
+
+@rule(
+    "HEM601",
+    title="Published without build provenance",
+    category="provenance",
+    weight=20,
+    online=True,
+    explain="""
+    The registry holds no attestation tying this release to a repository, a
+    workflow and a commit. Somebody uploaded a file, and there is no way to
+    check that the file matches any source you can read.
+
+    This mattered less when the alternative did not exist. It does now. npm
+    began revoking classic publish tokens in December 2025 and finished in
+    early 2026, which leaves trusted publishing as the ordinary path, and
+    trusted publishing emits provenance automatically. PyPI has carried PEP
+    740 attestations since late 2024. A release made after either of those
+    landed, with no provenance attached, was published some other way.
+
+    Ordinary reasons exist: an older project, a maintainer releasing from a
+    laptop, a registry mirror. Low weight for exactly that reason. What it
+    removes is your ability to answer the next question, which is whether the
+    tarball matches the tag.
+    """,
+)
+def no_provenance(pkg: Package, ctx: Context):
+    if pkg.meta.get("provenance"):
+        return
+    published = pkg.meta.get("published_at")
+    if published and published >= PROVENANCE_EXPECTED_FROM:
+        yield f"published {published:%Y-%m-%d} with no attestation on the registry"
+
+
+@rule(
+    "HEM602",
+    title="Provenance points at a different repository",
+    category="provenance",
+    weight=55,
+    online=True,
+    explain="""
+    The package tells you its source lives in one repository. The signed
+    attestation says the artifact was built from another. One of those is
+    wrong, and the attestation is the one backed by a signature.
+
+    This is the shape of an attack that survives review. You are sent to a
+    clean repository, you read clean code, and you install a build made
+    somewhere else. Before attestations existed there was no way to notice;
+    the published tarball and the tagged source were simply two things nobody
+    compared.
+
+    Forks and release automation in a separate repository produce this
+    legitimately, so check before you panic. What you want to confirm is that
+    the repository named in the attestation is one the maintainers control
+    and have said they build from.
+    """,
+)
+def provenance_mismatch(pkg: Package, ctx: Context):
+    prov = pkg.meta.get("provenance") or {}
+    built = prov.get("repository")
+    declared = pkg.meta.get("declared_repo")
+    if built and declared and built != declared:
+        yield f"declared {declared}, but built from {describe(prov)}"
+
+
+# --------------------------------------------------------------------------
+# public intelligence (requires --online)
+# --------------------------------------------------------------------------
+
+
+@rule(
+    "HEM701",
+    title="This exact version is reported as malware",
+    category="intel",
+    weight=100,
+    online=True,
+    certain=True,
+    explain="""
+    osv.dev carries a record naming this version as malicious. That is not an
+    inference drawn from the signals in this tool; somebody analysed the
+    package, wrote it up, and published the finding to a database that npm,
+    PyPI and every scanner downstream reads.
+
+    Because it is a report rather than a judgement, it does not get scored
+    against anything else. The verdict is 100 and the other rules stop
+    mattering.
+
+    The feed is large. An OSV mirror pulled in May 2026 held roughly 226,000
+    malicious-package records across npm and PyPI, which is what a registry
+    under sustained automated attack looks like. hemlock skips any record OSV
+    has withdrawn, because in May 2026 OSV pulled 157 malware reports that an
+    automated classifier had raised against trusted packages, and tools that
+    had already ingested them kept failing builds over nothing.
+
+    If this fired on something installed: remove it, then rotate every
+    credential the install had reach over. Look up the record id on osv.dev
+    for what the payload actually did.
+    """,
+)
+def known_malware(pkg: Package, ctx: Context):
+    for report in pkg.meta.get("malware", []):
+        aliases = f" ({', '.join(report['aliases'][:2])})" if report.get("aliases") else ""
+        yield f"{report['id']}{aliases}: {_clip(report['summary'], 70)}"
+
+
+@rule(
+    "HEM702",
+    title="Published advisory against this version",
+    category="intel",
+    weight=30,
+    online=True,
+    explain="""
+    An advisory covers the exact version installed, from osv.dev, which
+    aggregates GitHub Security Advisories, PyPA, and the ecosystem databases
+    into one place.
+
+    This is the one check here that overlaps with a conventional
+    vulnerability scanner, and it is included because a single batched
+    request covers the whole dependency list for free. Known vulnerabilities
+    are the easy half of the problem; everything else in this tool exists for
+    the packages no advisory has caught up with yet.
+
+    Look the ids up at osv.dev/vulnerability/<id>.
+    """,
+)
+def known_advisory(pkg: Package, ctx: Context):
+    advisories = pkg.meta.get("advisories") or []
+    if not advisories:
+        return
+    shown = ", ".join(advisories[:4])
+    more = f" and {len(advisories) - 4} more" if len(advisories) > 4 else ""
+    yield f"{len(advisories)} advisor{'y' if len(advisories) == 1 else 'ies'}: {shown}{more}"
+
+
+# --------------------------------------------------------------------------
+# what to do about it
+# --------------------------------------------------------------------------
+
+# One line per rule, imperative, no hedging. These are kept together rather
+# than spread through the decorators so the set can be read at once: a report
+# where every third entry says "investigate further" is a report nobody acts
+# on, and that only shows up when you see them side by side.
+REMEDIES = {
+    "HEM101": "Compare the name against what you meant to install, then find out which dependency asked for it.",
+    "HEM102": "Confirm the package against the project's own documentation, not against registry search results.",
+    "HEM103": "Nothing legitimate needs a look-alike character. Remove it.",
+    "HEM104": "If you meant the scoped package, the @scope is not optional.",
+    "HEM201": "Install with scripts off unless this package needs them: npm ci --ignore-scripts",
+    "HEM202": "Read the URL it fetches. If you cannot tell what it serves, do not install this.",
+    "HEM203": "There is no benign version of this. Remove it.",
+    "HEM204": "Treat every credential it could reach as exposed. Rotate first, investigate after.",
+    "HEM301": "Compare the published artifact against the package's own repository.",
+    "HEM302": "Check whether building code at runtime is what this package is for. Usually it is not.",
+    "HEM401": "Pin the version and commit a lockfile.",
+    "HEM402": "Regenerate the lockfile so the entry carries a hash.",
+    "HEM403": "Point the resolver at an https registry.",
+    "HEM404": "Pin to a commit rather than a branch, or move the dependency to the registry.",
+    "HEM405": "Replace the default index with --index-url rather than adding one with --extra-index-url.",
+    "HEM501": "Let the release age, or read the diff before taking it.",
+    "HEM502": "Check whether the new publisher appears in the project's repository or release notes.",
+    "HEM503": "Read the deprecation message, then move to whatever it points at.",
+    "HEM504": "Find out which dependency asked for this before trusting it.",
+    "HEM505": "Prefer a package whose source you can read.",
+    "HEM506": "Find out what the extra weight is before installing it.",
+    "HEM601": "Nothing to fix directly. It costs you the ability to check the tarball against the tag.",
+    "HEM602": "Confirm the maintainers control the repository the attestation names.",
+    "HEM701": "Remove it, then rotate every credential the install could reach.",
+    "HEM702": "Upgrade past the affected range. Look the ids up at osv.dev/vulnerability/<id>.",
+}
+
+for _rule_id, _remedy in REMEDIES.items():
+    RULES[_rule_id].fix = _remedy

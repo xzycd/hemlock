@@ -46,6 +46,16 @@ jobs:
           mkdir -p /tmp/clean
           printf 'requests==2.32.3\n' > /tmp/clean/requirements.txt
           hemlock scan /tmp/clean --fail-on low
+      - name: diff must flag only what a change adds
+        run: |
+          git -C /tmp/clean init -q
+          git -C /tmp/clean -c user.name=ci -c user.email=ci@ci add -A
+          git -C /tmp/clean -c user.name=ci -c user.email=ci@ci commit -qm base
+          printf 'requsts==2.28.0\n' >> /tmp/clean/requirements.txt
+          hemlock diff --since HEAD --path /tmp/clean --fail-on medium && {
+            echo "::error::hemlock diff did not flag the added typosquat"
+            exit 1
+          } || echo "typosquat flagged as expected"
       - name: emit SARIF
         run: hemlock scan examples/compromised-app --format sarif > hemlock.sarif
       - uses: actions/upload-artifact@v4
@@ -54,7 +64,8 @@ jobs:
           path: hemlock.sarif
 
   live-registry:
-    # Kept separate so a registry outage never blocks a pull request.
+    # Kept separate so an upstream outage never blocks a pull request. This is
+    # the job that notices when npm, PyPI or OSV changes a response shape.
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -64,4 +75,22 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e .
-      - run: hemlock scan examples/compromised-app --online --fail-on never
+      - name: online rules still resolve
+        run: hemlock scan examples/compromised-app --online --fail-on never
+      - name: OSV still reports a known-malicious version
+        # chalk 5.6.1 is the September 2025 compromise. If this stops being
+        # reported, either OSV withdrew the record or our query broke.
+        run: |
+          mkdir -p /tmp/mal
+          cat > /tmp/mal/package-lock.json <<'JSON'
+          {"lockfileVersion":3,"packages":{
+            "":{"dependencies":{"chalk":"5.6.1"}},
+            "node_modules/chalk":{"version":"5.6.1","integrity":"sha512-x"}}}
+          JSON
+          hemlock scan /tmp/mal --online --format json > /tmp/mal/out.json
+          python -c "
+          import json,sys
+          d=json.load(open('/tmp/mal/out.json'))
+          assert d['malware'], 'OSV returned no malware record for chalk@5.6.1'
+          print('malware reported:', d['malware'])
+          "

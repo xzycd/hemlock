@@ -1,104 +1,68 @@
-"""Registry lookups for the --online rules.
+"""Per-package registry metadata for the --online rules.
 
-Public endpoints only, no credentials, no account required. Responses are
-cached on disk because a second run five minutes later should not cost the
-registry anything, and because a scan you re-run while triaging should be
-instant.
+Public endpoints only: no credentials, no account, no telemetry. Each package
+gets one pass on a thread pool, and that pass also picks up build provenance
+so there is never a second wave of requests over the same list.
 """
 
 from __future__ import annotations
 
-import gzip
-import hashlib
-import json
-import os
-import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
+from .http import Http
 from .model import Package
+from .provenance import npm_provenance, pypi_provenance, repo_slug
 from .pypi import normalize
 
 NPM_REGISTRY = "https://registry.npmjs.org"
 NPM_DOWNLOADS = "https://api.npmjs.org/downloads/point/last-week"
 PYPI = "https://pypi.org/pypi"
 
-USER_AGENT = "hemlock (+https://github.com/hemlock-scan/hemlock)"
-CACHE_TTL = 6 * 3600
-
 
 class Registry:
-    def __init__(self, cache_dir: str | None = None, workers: int = 8, timeout: int = 15):
-        self.cache_dir = cache_dir or _default_cache()
+    def __init__(self, http: Http | None = None, workers: int = 12):
+        self.http = http or Http()
         self.workers = workers
-        self.timeout = timeout
-        self.failures: list[str] = []
-        os.makedirs(self.cache_dir, exist_ok=True)
 
-    # -- fetching ---------------------------------------------------------
-
-    def _get(self, url: str) -> dict | None:
-        key = hashlib.sha256(url.encode()).hexdigest()[:32]
-        path = os.path.join(self.cache_dir, key + ".json")
-        try:
-            if time.time() - os.path.getmtime(path) < CACHE_TTL:
-                with open(path, "rb") as fh:
-                    return json.loads(gzip.decompress(fh.read()))
-        except (OSError, ValueError):
-            pass
-
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"})
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read()
-                if resp.headers.get("Content-Encoding") == "gzip":
-                    raw = gzip.decompress(raw)
-                doc = json.loads(raw)
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-            self.failures.append(f"{url}: {exc}")
-            return None
-
-        try:
-            with open(path, "wb") as fh:
-                fh.write(gzip.compress(json.dumps(doc).encode()))
-        except OSError:
-            pass
-        return doc
-
-    # -- enrichment -------------------------------------------------------
+    @property
+    def failures(self) -> list[str]:
+        return self.http.failures
 
     def enrich(self, packages: list[Package], progress=None) -> None:
-        """Fill pkg.meta for every distinct package, in parallel."""
         by_key: dict[tuple[str, str, str | None], list[Package]] = {}
         for p in packages:
-            by_key.setdefault((p.ecosystem, p.name, p.version), []).append(p)
+            if p.kind == "package":
+                by_key.setdefault((p.ecosystem, p.name, p.version), []).append(p)
+        if not by_key:
+            return
 
+        keys = list(by_key)
         done = 0
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
-            results = pool.map(lambda k: self._lookup(*k), by_key)
-            for key, meta in zip(by_key, results, strict=True):
+            for key, meta in zip(keys, pool.map(lambda k: self._lookup(*k), keys), strict=True):
                 for pkg in by_key[key]:
                     pkg.meta.update(meta)
                 done += 1
                 if progress:
-                    progress(done, len(by_key))
+                    progress(done, len(keys))
 
     def _lookup(self, ecosystem: str, name: str, version: str | None) -> dict:
         try:
-            if ecosystem == "npm":
-                return self._npm(name, version)
-            return self._pypi(name, version)
-        except Exception as exc:  # a bad payload should never kill a scan
-            self.failures.append(f"{ecosystem}:{name}: {exc}")
+            return self._npm(name, version) if ecosystem == "npm" else self._pypi(name, version)
+        except Exception as exc:  # a malformed payload must not kill the scan
+            self.http.failures.append(f"{ecosystem}:{name}: {exc}")
             return {}
 
+    # -- npm --------------------------------------------------------------
+
     def _npm(self, name: str, version: str | None) -> dict:
-        doc = self._get(f"{NPM_REGISTRY}/{urllib.parse.quote(name, safe='@')}")
+        quoted = urllib.parse.quote(name, safe="@")
+        doc = self.http.get(f"{NPM_REGISTRY}/{quoted}", allow_404=True)
         if not doc:
-            return {}
+            return {"unpublished": True} if doc is None else {}
+
         versions = doc.get("versions") or {}
         times = doc.get("time") or {}
         version = version or (doc.get("dist-tags") or {}).get("latest")
@@ -108,48 +72,64 @@ class Registry:
         if published := _parse_time(times.get(version)):
             meta["published_at"] = published
 
-        # Releases that went out before this one, newest first.
-        history = sorted(
-            (v for v in versions if v != version and v in times),
-            key=lambda v: times[v],
-            reverse=True,
+        # Only releases that came out *before* this one count as history.
+        # Sorting by recency alone gets this backwards for a pinned older
+        # version, where the newest releases are the ones it predates.
+        stamp = times.get(version)
+        earlier = sorted(
+            (v for v in versions if v != version and v in times and (not stamp or times[v] < stamp)),
+            key=lambda v: times[v], reverse=True,
         )
-        if entry.get("_npmUser", {}).get("name"):
-            meta["publisher"] = entry["_npmUser"]["name"]
-        priors = [versions[v].get("_npmUser", {}).get("name") for v in history[:10]]
-        meta["prior_publishers"] = [p for p in priors if p]
+
+        if publisher := (entry.get("_npmUser") or {}).get("name"):
+            meta["publisher"] = publisher
+        # Everyone who ever shipped an earlier release, not just the last few.
+        # A co-maintainer who publishes every other version is not news; an
+        # account that has never published this package before is.
+        meta["prior_publishers"] = sorted({
+            name for v in earlier
+            if (name := (versions[v].get("_npmUser") or {}).get("name"))
+        })
 
         dist = entry.get("dist") or {}
-        meta["signed"] = bool(dist.get("signatures") or dist.get("attestations"))
         if dist.get("unpackedSize"):
             meta["unpacked_size"] = dist["unpackedSize"]
-        for prev in history:
-            size = (versions[prev].get("dist") or {}).get("unpackedSize")
-            if size:
+        for prev in earlier:
+            if size := ((versions[prev].get("dist") or {}).get("unpackedSize")):
                 meta["prior_unpacked_size"] = size
                 break
 
         if entry.get("deprecated"):
             meta["deprecated"] = entry["deprecated"]
-        if not (entry.get("repository") or doc.get("repository")):
-            meta["repo_missing"] = True
 
-        counts = self._get(f"{NPM_DOWNLOADS}/{urllib.parse.quote(name, safe='@')}")
-        if counts and isinstance(counts.get("downloads"), int):
-            meta["downloads"] = counts["downloads"]
+        declared = entry.get("repository") or doc.get("repository")
+        if not declared:
+            meta["repo_missing"] = True
+        else:
+            meta["declared_repo"] = repo_slug(declared)
+
+        if counts := self.http.get(f"{NPM_DOWNLOADS}/{quoted}", allow_404=True):
+            if isinstance(counts.get("downloads"), int):
+                meta["downloads"] = counts["downloads"]
+
+        if version:
+            meta["provenance"] = npm_provenance(name, version, self.http)
         return meta
+
+    # -- pypi -------------------------------------------------------------
 
     def _pypi(self, name: str, version: str | None) -> dict:
         slug = urllib.parse.quote(normalize(name), safe="")
-        url = f"{PYPI}/{slug}/{urllib.parse.quote(version, safe='')}/json" if version else f"{PYPI}/{slug}/json"
-        doc = self._get(url)
+        path = f"{slug}/{urllib.parse.quote(version, safe='')}/json" if version else f"{slug}/json"
+        doc = self.http.get(f"{PYPI}/{path}", allow_404=True)
         if not doc:
             return {}
+
         info = doc.get("info") or {}
+        files = doc.get("urls") or []
         meta: dict = {}
 
-        files = doc.get("urls") or []
-        stamps = [f.get("upload_time_iso_8601") for f in files if f.get("upload_time_iso_8601")]
+        stamps = [f["upload_time_iso_8601"] for f in files if f.get("upload_time_iso_8601")]
         if stamps and (published := _parse_time(min(stamps))):
             meta["published_at"] = published
 
@@ -158,19 +138,23 @@ class Registry:
             meta["yanked_reason"] = info.get("yanked_reason")
 
         urls = info.get("project_urls") or {}
-        has_repo = info.get("home_page") or any(
-            k.lower() in {"source", "repository", "homepage", "source code", "code", "github"}
-            for k in urls
+        repo = info.get("home_page") or next(
+            (v for k, v in urls.items()
+             if k.lower() in {"source", "repository", "homepage", "source code", "code", "github"}),
+            None,
         )
-        if not has_repo:
+        if repo:
+            meta["declared_repo"] = repo_slug(repo)
+        else:
             meta["repo_missing"] = True
 
-        if vulns := doc.get("vulnerabilities"):
-            meta["vulnerabilities"] = vulns
-
-        sizes = [f.get("size") for f in files if f.get("size")]
-        if sizes:
+        if sizes := [f["size"] for f in files if f.get("size")]:
             meta["unpacked_size"] = max(sizes)
+
+        # PEP 740 attestations attach to a file, so prefer the wheel.
+        target = next((f for f in files if f.get("packagetype") == "bdist_wheel"), files[0] if files else None)
+        if target and version:
+            meta["provenance"] = pypi_provenance(normalize(name), version, target["filename"], self.http)
         return meta
 
 
@@ -181,8 +165,3 @@ def _parse_time(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
     except ValueError:
         return None
-
-
-def _default_cache() -> str:
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-    return os.path.join(base, "hemlock")
