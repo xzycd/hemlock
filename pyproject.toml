@@ -32,9 +32,9 @@ dev = ["pytest>=7", "ruff>=0.5"]
 hemlock = "hemlock.cli:run"
 
 [project.urls]
-Homepage = "https://github.com/hemlock-scan/hemlock"
-Source = "https://github.com/hemlock-scan/hemlock"
-Issues = "https://github.com/hemlock-scan/hemlock/issues"
+Homepage = "https://github.com/xzycd/hemlock"
+Source = "https://github.com/xzycd/hemlock"
+Issues = "https://github.com/xzycd/hemlock/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["hemlock"]
