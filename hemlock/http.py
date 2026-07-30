@@ -16,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "hemlock (+https://github.com/hemlock-scan/hemlock)"
+USER_AGENT = "hemlock (+https://github.com/xzycd/hemlock)"
 DEFAULT_TTL = 6 * 3600
 
 

@@ -58,6 +58,17 @@ jobs:
           } || echo "typosquat flagged as expected"
       - name: emit SARIF
         run: hemlock scan examples/compromised-app --format sarif > hemlock.sarif
+      - name: the pull request comment still renders
+        run: |
+          hemlock scan examples/compromised-app --format markdown --fail-on never > hemlock.md
+          head -1 hemlock.md | grep -q '<!-- hemlock -->' || {
+            echo "::error::markdown report lost its comment marker"
+            exit 1
+          }
+          grep -q '| 🔴 |' hemlock.md || {
+            echo "::error::markdown report has no critical row for the known-bad fixture"
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: hemlock-sarif

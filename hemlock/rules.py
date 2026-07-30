@@ -900,7 +900,7 @@ REMEDIES = {
     "HEM601": "Nothing to fix directly. It costs you the ability to check the tarball against the tag.",
     "HEM602": "Confirm the maintainers control the repository the attestation names.",
     "HEM701": "Remove it, then rotate every credential the install could reach.",
-    "HEM702": "Upgrade past the affected range. Look the ids up at osv.dev/vulnerability/<id>.",
+    "HEM702": "Upgrade past the affected range. Every id above resolves at osv.dev.",
 }
 
 for _rule_id, _remedy in REMEDIES.items():
