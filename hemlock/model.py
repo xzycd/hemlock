@@ -18,6 +18,8 @@ CATEGORIES = {
     "code": "Code shape",
     "lockfile": "Pinning and integrity",
     "registry": "Registry trust",
+    "provenance": "Build provenance",
+    "intel": "Public intelligence",
 }
 
 SEVERITY_BANDS = [
@@ -64,6 +66,10 @@ class Rule:
     explain: str
     online: bool
     check: Callable[[Package, Context], Iterable[str]]
+    # A certain rule reports a fact somebody else has already established
+    # rather than an inference of our own, so it settles the verdict alone
+    # and skips the weighting entirely.
+    certain: bool = False
 
 
 @dataclass
@@ -84,6 +90,7 @@ class Verdict:
     multiplier: float
     categories: list[str]
     parts: dict[str, int] = field(default_factory=dict)
+    certain: bool = False
 
     @property
     def severity(self) -> str:
@@ -110,7 +117,8 @@ class Context:
 RULES: dict[str, Rule] = {}
 
 
-def rule(rid: str, *, title: str, category: str, weight: int, explain: str, online: bool = False):
+def rule(rid: str, *, title: str, category: str, weight: int, explain: str,
+         online: bool = False, certain: bool = False):
     """Register a check. Yield one string per piece of evidence."""
 
     def register(fn):
@@ -118,7 +126,7 @@ def rule(rid: str, *, title: str, category: str, weight: int, explain: str, onli
             raise ValueError(f"duplicate rule id {rid}")
         if category not in CATEGORIES:
             raise ValueError(f"unknown category {category}")
-        RULES[rid] = Rule(rid, title, category, weight, dedent(explain).strip(), online, fn)
+        RULES[rid] = Rule(rid, title, category, weight, dedent(explain).strip(), online, fn, certain)
         return fn
 
     return register

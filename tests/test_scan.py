@@ -262,5 +262,26 @@ def test_rule_counts_match_the_readme():
     """The README quotes these numbers. Adding a rule should force an edit."""
     readme = open(os.path.join(os.path.dirname(__file__), "..", "README.md")).read()
     offline = [r for r in RULES.values() if not r.online]
-    assert (len(RULES), len(offline)) == (23, 15)
-    assert "Twenty-three rules" in readme and "Fifteen need no network" in readme
+    assert (len(RULES), len(offline)) == (25, 15)
+    assert "Twenty-five rules" in readme and "Fifteen need no network" in readme
+
+
+def test_only_reported_facts_are_certain():
+    """`certain` skips the scoring entirely, so it stays reserved for rules
+    that repeat someone else's published analysis rather than infer."""
+    assert {r.id for r in RULES.values() if r.certain} == {"HEM701"}
+
+
+def test_a_certain_finding_settles_the_verdict_alone():
+    pkg, findings = make_findings("HEM701")
+    v = score_package(pkg, findings)
+    assert v.score == 100 and v.certain and v.severity == "critical"
+
+    # It also overrides arithmetic that would otherwise total far less.
+    pkg, mixed = make_findings("HEM701", "HEM401")
+    assert score_package(pkg, mixed).score == 100
+
+
+def test_certain_findings_sort_first():
+    pkg, mixed = make_findings("HEM401", "HEM701")
+    assert score_package(pkg, mixed).findings[0].rule.id == "HEM701"
