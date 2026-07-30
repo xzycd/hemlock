@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hemlock-scan"
+version = "0.1.0"
+description = "Supply-chain scanner for npm and PyPI. Flags packages that behave like an attack, not just ones with a CVE."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+keywords = ["security", "supply-chain", "npm", "pypi", "typosquatting", "sbom", "sast"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+  "Topic :: Software Development :: Quality Assurance",
+]
+
+# No runtime dependencies, deliberately. See the README.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.5"]
+
+[project.scripts]
+hemlock = "hemlock.cli:run"
+
+[project.urls]
+Homepage = "https://github.com/hemlock-scan/hemlock"
+Source = "https://github.com/hemlock-scan/hemlock"
+Issues = "https://github.com/hemlock-scan/hemlock/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hemlock"]
+
+[tool.hatch.build.targets.sdist]
+include = ["hemlock", "tests", "examples", "README.md", "LICENSE"]
+
+[tool.ruff]
+line-length = 118
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

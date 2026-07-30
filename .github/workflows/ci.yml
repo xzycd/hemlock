@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # The online rules talk to live registries. A weekly run catches it when
+    # a registry changes a response shape under us.
+    - cron: "17 6 * * 1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: ruff check hemlock tests
+      - run: pytest -q
+
+  detection:
+    # The fixture is a known-bad project. If hemlock stops flagging it, the
+    # rules regressed, and that should break the build louder than a unit test.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: fixture must be flagged critical
+        run: |
+          hemlock scan examples/compromised-app --fail-on critical && {
+            echo "::error::hemlock did not flag the known-bad fixture"
+            exit 1
+          } || echo "fixture flagged as expected"
+      - name: clean project must pass
+        run: |
+          mkdir -p /tmp/clean
+          printf 'requests==2.32.3\n' > /tmp/clean/requirements.txt
+          hemlock scan /tmp/clean --fail-on low
+      - name: emit SARIF
+        run: hemlock scan examples/compromised-app --format sarif > hemlock.sarif
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hemlock-sarif
+          path: hemlock.sarif
+
+  live-registry:
+    # Kept separate so a registry outage never blocks a pull request.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: hemlock scan examples/compromised-app --online --fail-on never

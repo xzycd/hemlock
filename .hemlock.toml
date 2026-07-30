@@ -1,0 +1,23 @@
+# hemlock configuration. Drop this at the root of a project.
+# Everything here is optional; the defaults are what you see below.
+
+# Exit non-zero when anything reaches this severity.
+# One of: low, medium, high, critical, never
+fail_on = "high"
+
+# How new a release has to be before HEM501 calls it fresh.
+fresh_days = 14
+
+# Turn rules off entirely. Prefer an [[ignore]] block with a reason --
+# this list applies everywhere and leaves no record of why.
+disable = []
+
+# Suppressions. A reason is expected, and an expiry is strongly encouraged:
+# an ignore with no end date outlives whoever added it, and that is how a
+# scanner quietly stops finding anything. Expired entries are reported.
+#
+# [[ignore]]
+# rule = "HEM201"          # rule id, or a glob such as "HEM4*"
+# package = "esbuild"      # package name, or a glob. Defaults to everything.
+# reason = "compiles a native binary at install time; reviewed 2026-07-14"
+# expires = "2026-12-31"
