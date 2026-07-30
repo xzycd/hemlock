@@ -1,6 +1,12 @@
 <div align="center">
 
-# hemlock
+```
+██  ██  ██████  ██      ██  ██      ██████  ██████  ██    ██
+██  ██  ██      ████  ████  ██      ██  ██  ██      ██  ██
+██████  ████    ██  ██  ██  ██      ██  ██  ██      ████
+██  ██  ██      ██      ██  ██      ██  ██  ██      ██  ██
+██  ██  ██████  ██      ██  ██████  ██████  ██████  ██    ██
+```
 
 **Poison hemlock looks like parsley.**
 
@@ -59,6 +65,8 @@ already public and free.
      └ HEM702  Published advisory against this version
                2 advisories: GHSA-qw6h-vgh9-j6wx, GHSA-rv95-896h-c2vc
        intel 30 → 30
+       via  app-kit › build-tools › express
+       fix  Upgrade past the affected range. Look the ids up at osv.dev.
 
   ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇  2 scanned · 1 critical · 1 medium
   › hemlock explain HEM701   to read why any of these rules exist
@@ -86,9 +94,12 @@ pipx run hemlock-scan scan .
 ## Use
 
 ```bash
+hemlock init                      # write a config file and a CI workflow
 hemlock scan .                    # offline, fast, no network at all
 hemlock scan . --online           # add registry, provenance and OSV checks
 hemlock diff --since origin/main  # score only what a branch adds
+hemlock why left-pad              # who asked for this package
+hemlock baseline .                # accept today's findings, fail only on new ones
 hemlock explain HEM701            # why a rule exists and what to do about it
 hemlock rules                     # every check, with its weight
 ```
@@ -127,6 +138,54 @@ $ hemlock diff --since HEAD~1
 
 `--since` takes any git ref. Two lockfile paths work too, for comparing
 artifacts that never shared a repository.
+
+### Adopting it on a codebase that already has a backlog
+
+Point a new scanner at an established project and it returns four hundred
+findings. Nobody triages four hundred findings, so the tool gets switched off,
+or wired into CI with the threshold set so high it never fires, which is the
+same thing with extra steps.
+
+```bash
+hemlock baseline .
+```
+
+That records what was true on the day you adopted it. From then on a scan
+reports only findings that are new, and a committed baseline applies
+automatically so CI stops failing on the backlog without anyone remembering a
+flag. The accepted findings are still counted in the summary, marked as known,
+and `--ignore-baseline` brings them all back.
+
+The fingerprint includes the version, so a dependency that moves re-raises
+everything about itself. Accepting a finding in March says nothing about the
+release that landed last night.
+
+### Who asked for this?
+
+Several rules end by telling you to work out which dependency pulled something
+in. That was poor advice from a tool that could not answer it.
+
+```
+$ hemlock why colorz
+
+  colorz 1.0.4  npm
+  package-lock.json
+
+  reached through
+    app-kit › build-tools › colorz
+
+  flagged
+    HEM101  Name is a near-miss of a popular package
+            1 edit away from "colors"
+
+  fix  Compare the name against what you meant to install, then find out which
+       dependency asked for it.
+```
+
+Routes are built from the lockfiles hemlock already read, following npm's own
+resolution order, so a nested copy of a package wins over a hoisted one.
+Transitive findings in the normal scan view carry the same route on a `via`
+line.
 
 ### The part worth trying first
 
@@ -298,7 +357,9 @@ built so that it only matters then.
 
 ## In CI
 
-Gate a pull request on what it introduces rather than on the whole tree:
+`hemlock init` writes a workflow that does the right thing on both events, or
+you can write it yourself. Gate a pull request on what it introduces rather
+than on the whole tree:
 
 ```yaml
 - run: pipx install hemlock-scan
@@ -391,6 +452,9 @@ hemlock/
   cli.py         argument parsing, exit codes
   scan.py        find manifests, resolve packages, run rules, score
   diff.py        the same rules over only what a change added or moved
+  graph.py       who asked for a package, from the lockfiles already parsed
+  baseline.py    accepting what was already there
+  brand.py       the wordmark
   model.py       Package, Finding, Verdict, and the rule registry
   rules.py       every check, one function each
   score.py       the arithmetic above, and only that

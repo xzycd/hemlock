@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass, field
 
 from . import npm, pypi, rules  # noqa: F401  (importing rules registers them)
+from .graph import Graph
+from .graph import build as build_graph
 from .model import Context, Finding, Package, Verdict, active_rules
 from .policy import Policy
 from .score import score_package
@@ -22,6 +25,9 @@ class Report:
     warnings: list[str] = field(default_factory=list)
     http_calls: int = 0
     cache_hits: int = 0
+    baselined: int = 0
+    elapsed: float = 0.0
+    graph: Graph | None = None
 
     @property
     def flagged(self) -> list[Verdict]:
@@ -73,8 +79,10 @@ def _dedupe(packages: list[Package]) -> list[Package]:
 
 
 def run(root: str, policy: Policy, online: bool = False, progress=None) -> Report:
+    started = time.perf_counter()
     manifests, packages = collect(root)
     report = Report(root=root, manifests=manifests, packages=packages, online=online)
+    report.graph = build_graph(root, packages)
 
     ctx = Context(root=root, online=online, packages=packages, fresh_days=policy.fresh_days)
 
@@ -97,6 +105,7 @@ def run(root: str, policy: Policy, online: bool = False, progress=None) -> Repor
             )
 
     run_rules(report, policy, online, packages, ctx)
+    report.elapsed = time.perf_counter() - started
     return report
 
 

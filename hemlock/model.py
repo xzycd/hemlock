@@ -70,6 +70,9 @@ class Rule:
     # rather than an inference of our own, so it settles the verdict alone
     # and skips the weighting entirely.
     certain: bool = False
+    # One imperative line: what to do about it. Assigned from REMEDIES in
+    # rules.py so the whole set can be read, and kept consistent, together.
+    fix: str = ""
 
 
 @dataclass

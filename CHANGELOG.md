@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.3.0
+
+The theme is adoption. Version 0.2 could tell you a lot about a codebase and
+very little about what to do next, and it could not be introduced to a project
+that already had a backlog.
+
+### Added
+
+- **Baselines.** `hemlock baseline` records every current finding as accepted.
+  After that a scan reports only what is new, so a project with four hundred
+  existing findings can adopt the tool on a Tuesday instead of never. A
+  committed baseline applies automatically, because CI should stop failing on
+  the backlog without anyone remembering a flag. `--ignore-baseline` shows
+  everything again.
+
+  The fingerprint includes the version, so a dependency that moves re-raises
+  everything about itself. Accepting a finding in March says nothing about the
+  release that landed last night.
+
+- **`hemlock why <package>`.** Several rules ended by telling you to find out
+  which dependency pulled a package in, which was poor advice from a tool that
+  could not answer it. It can now: `graph.py` builds the edges from lockfiles
+  it already read, following npm's own resolution order so a nested copy wins
+  over a hoisted one. Transitive findings in the normal scan view gained a
+  `via` line showing the route.
+
+- **A remedy on every finding.** One imperative line per rule, kept together in
+  `rules.py` rather than spread through the decorators, so the whole set can be
+  read at once. A report where every third entry says "investigate further" is
+  a report nobody acts on, and that only shows up side by side.
+
+- **`hemlock init`.** Writes a commented `.hemlock.toml` and a GitHub workflow
+  that judges pull requests as diffs and everything else as full scans. Neither
+  file is overwritten if it already exists.
+
+- **A wordmark.** Five rows of block letters in a purple gradient, from an
+  alphabet that knows exactly seven letters. It animates in about 200ms on an
+  interactive terminal and stays out of the way everywhere else: never under
+  CI, never without colour, never in front of JSON.
+
+- Scans report how long they took.
+
 ## 0.2.0
 
 The theme is signals that only became available recently, plus a way to review
