@@ -4,7 +4,8 @@ import argparse
 import os
 import sys
 
-from . import __version__, scan
+from . import __version__, brand, scan
+from . import baseline as baseline_mod
 from . import policy as policy_mod
 from . import report as fmt
 from .model import RULES
@@ -32,6 +33,22 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--path", default=".", help="project directory when using --since (default: .)")
     _shared(d)
 
+    w = sub.add_parser("why", help="show where a package came from and what is wrong with it")
+    w.add_argument("package", help="package name, or a fragment of one")
+    w.add_argument("--path", default=".", help="project directory (default: .)")
+    w.add_argument("--online", action="store_true", help="add registry, provenance and OSV checks")
+    w.add_argument("--color", choices=["auto", "always", "never"], default="auto")
+
+    b = sub.add_parser("baseline", help="accept every current finding so CI only fails on new ones")
+    b.add_argument("path", nargs="?", default=".", help="project directory (default: .)")
+    b.add_argument("--online", action="store_true", help="include the online rules in the baseline")
+    b.add_argument("--config", metavar="FILE", help="path to .hemlock.toml")
+    b.add_argument("--color", choices=["auto", "always", "never"], default="auto")
+
+    i = sub.add_parser("init", help="write a config file and a CI workflow")
+    i.add_argument("path", nargs="?", default=".", help="project directory (default: .)")
+    i.add_argument("--color", choices=["auto", "always", "never"], default="auto")
+
     e = sub.add_parser("explain", help="why a rule exists and what to do about it")
     e.add_argument("rule", help="a rule id, e.g. HEM701")
     e.add_argument("--color", choices=["auto", "always", "never"], default="auto")
@@ -49,12 +66,17 @@ def _shared(sp) -> None:
     sp.add_argument("--format", choices=["terminal", "json", "sarif"], default="terminal")
     sp.add_argument("--config", metavar="FILE", help="path to .hemlock.toml")
     sp.add_argument("--color", choices=["auto", "always", "never"], default="auto")
+    sp.add_argument("--ignore-baseline", action="store_true",
+                    help="report accepted findings too, instead of only new ones")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:
+        print(brand.logo(color=fmt.want_color("auto"),
+                         animate=brand.wants_animation(fmt.want_color("auto")),
+                         version=__version__))
         parser.print_help()
         return 0
 
@@ -74,7 +96,13 @@ def main(argv: list[str] | None = None) -> int:
         print(fmt.rule_table(ink, online_only=args.online))
         return 0
 
-    return _scan(args, ink) if args.command == "scan" else _diff(args, ink)
+    return {
+        "scan": _scan,
+        "diff": _diff,
+        "why": _why,
+        "baseline": _baseline,
+        "init": _init,
+    }[args.command](args, ink)
 
 
 # --------------------------------------------------------------------------
@@ -136,6 +164,12 @@ def _scan(args, ink: fmt.Ink) -> int:
     progress = _progress_for(args)
     report = scan.run(root, pol, online=args.online, progress=progress)
     _clear(progress)
+
+    # A baseline present in the project is applied by default. That is the
+    # whole point of committing one: CI should stop failing on the backlog
+    # without anyone having to remember a flag.
+    if not args.ignore_baseline and (known := baseline_mod.load(root)):
+        baseline_mod.apply(report, known)
 
     if args.format == "json":
         print(fmt.as_json(report))
@@ -209,3 +243,143 @@ def run() -> None:
         sys.exit(main())
     except KeyboardInterrupt:
         sys.exit(130)
+
+
+WORKFLOW = """\
+name: hemlock
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install hemlock-scan
+
+      # On a pull request, judge what the branch adds rather than the whole
+      # tree. Everything already in the lockfile was somebody else's decision.
+      - name: scan the change
+        if: github.event_name == 'pull_request'
+        run: hemlock diff --since origin/${{ github.base_ref }} --online --fail-on high
+
+      - name: scan everything
+        if: github.event_name != 'pull_request'
+        run: hemlock scan . --online --fail-on high
+"""
+
+
+def _why(args, ink: fmt.Ink) -> int:
+    root = os.path.abspath(args.path)
+    if not os.path.isdir(root):
+        print(f"hemlock: {args.path} is not a directory", file=sys.stderr)
+        return 2
+
+    pol = policy_mod.load(root, None)
+    report = scan.run(root, pol, online=args.online, progress=None)
+
+    needle = args.package.lower()
+    exact = [(v, v.package) for v in report.verdicts if v.package.name.lower() == needle]
+    matches = exact or [
+        (v, v.package) for v in report.verdicts
+        if needle in v.package.name.lower() and v.package.kind == "package"
+    ]
+
+    if not matches:
+        print(f"\n  no package matching {args.package!r} in {args.path}\n", file=sys.stderr)
+        return 2
+    if len(matches) > 6:
+        names = sorted({p.name for _, p in matches})
+        print(f"\n  {args.package!r} matches {len(names)} packages: "
+              f"{', '.join(names[:8])}...\n", file=sys.stderr)
+        return 2
+
+    print(fmt.why(report, matches, ink))
+    return 0
+
+
+def _baseline(args, ink: fmt.Ink) -> int:
+    root = os.path.abspath(args.path)
+    if not os.path.isdir(root):
+        print(f"hemlock: {args.path} is not a directory", file=sys.stderr)
+        return 2
+
+    pol = policy_mod.load(root, args.config)
+    report = scan.run(root, pol, online=args.online, progress=None)
+    path, count = baseline_mod.write(report, root)
+
+    scope = "including the online rules" if args.online else "offline rules only"
+    print(f"\n  accepted {count} findings across {len(report.flagged)} packages, {scope}")
+    print(f"  written to {os.path.relpath(path, root)}")
+    print(f"  {ink('commit it', 'accent')}, and future scans will only fail on findings that are new\n")
+    return 0
+
+
+def _init(args, ink: fmt.Ink) -> int:
+    root = os.path.abspath(args.path)
+    if not os.path.isdir(root):
+        print(f"hemlock: {args.path} is not a directory", file=sys.stderr)
+        return 2
+
+    written, skipped = [], []
+    config = os.path.join(root, ".hemlock.toml")
+    if os.path.exists(config):
+        skipped.append(".hemlock.toml")
+    else:
+        with open(config, "w", encoding="utf-8") as fh:
+            fh.write(DEFAULT_CONFIG)
+        written.append(".hemlock.toml")
+
+    workflow = os.path.join(root, ".github", "workflows", "hemlock.yml")
+    if os.path.exists(workflow):
+        skipped.append(".github/workflows/hemlock.yml")
+    else:
+        os.makedirs(os.path.dirname(workflow), exist_ok=True)
+        with open(workflow, "w", encoding="utf-8") as fh:
+            fh.write(WORKFLOW)
+        written.append(".github/workflows/hemlock.yml")
+
+    print("")
+    for name in written:
+        print(f"  {ink('created', 'clean')}  {name}")
+    for name in skipped:
+        print(f"  {ink('kept', 'dim')}     {name} {ink('(already there)', 'dim')}")
+    if written:
+        print(f"\n  next: {ink('hemlock scan .', 'accent')}, then "
+              f"{ink('hemlock baseline .', 'accent')} if there is more than you want to fix today\n")
+    else:
+        print("")
+    return 0
+
+
+DEFAULT_CONFIG = """\
+# hemlock configuration. Everything here is optional.
+
+# Exit non-zero when anything reaches this severity.
+# One of: low, medium, high, critical, never
+fail_on = "high"
+
+# How new a release has to be before HEM501 calls it fresh.
+fresh_days = 14
+
+# Turn rules off entirely. Prefer an [[ignore]] block with a reason.
+disable = []
+
+# Suppressions. A reason is expected and an expiry is strongly encouraged:
+# an ignore with no end date outlives whoever added it, and that is how a
+# scanner quietly stops finding anything. Expired entries get reported.
+#
+# [[ignore]]
+# rule = "HEM201"          # rule id, or a glob such as "HEM4*"
+# package = "esbuild"      # package name, or a glob. Defaults to everything.
+# reason = "compiles a native binary at install time; reviewed today"
+# expires = "2027-01-01"
+"""

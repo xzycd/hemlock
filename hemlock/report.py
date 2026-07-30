@@ -124,6 +124,12 @@ def width() -> int:
     return max(60, min(shutil.get_terminal_size((100, 24)).columns, 110))
 
 
+def duration(seconds: float) -> str:
+    if seconds < 1:
+        return f"{seconds * 1000:.0f}ms"
+    return f"{seconds:.1f}s"
+
+
 def _visible(text: str) -> int:
     return len(re.sub(r"\033\[[0-9;]*m", "", text))
 
@@ -140,7 +146,8 @@ def terminal(report: Report, ink: Ink, show_all: bool = False) -> str:
 
     mode = "online" if report.online else "offline"
     meta = f" {g['sep']} ".join(
-        [f"{len(report.packages)} packages", f"{len(report.manifests)} manifests", mode]
+        [f"{len(report.packages)} packages", f"{len(report.manifests)} manifests",
+         mode, duration(report.elapsed)]
     )
     out.append(_rule_line("hemlock", meta, ink, g, w))
     out.append("")
@@ -157,7 +164,7 @@ def terminal(report: Report, ink: Ink, show_all: bool = False) -> str:
         out.append("")
 
     for v in shown:
-        out.extend(_verdict_block(v, ink, g, w, uni))
+        out.extend(_verdict_block(v, ink, g, w, uni, graph=report.graph))
 
     out.append(_summary(report, ink, g))
     out.extend(_footer(report, ink, g))
@@ -189,7 +196,7 @@ def _alarm(report: Report, ink: Ink, w: int) -> list[str]:
     return lines
 
 
-def _verdict_block(v, ink: Ink, g: dict, w: int, uni: bool, change=None) -> list[str]:
+def _verdict_block(v, ink: Ink, g: dict, w: int, uni: bool, change=None, graph=None) -> list[str]:
     sev = v.severity
     if v.package.kind == "manifest":
         tag, title = "file", v.package.origin
@@ -214,8 +221,35 @@ def _verdict_block(v, ink: Ink, g: dict, w: int, uni: bool, change=None) -> list
 
     if v.findings:
         lines.append("       " + ink(arithmetic(v, unicode=uni), "dim"))
+        lines.extend(_tail(v, ink, g, w, graph))
     lines.append("")
     return lines
+
+
+def _tail(v, ink: Ink, g: dict, w: int, graph) -> list[str]:
+    """The two lines that turn a finding into something you can act on:
+    where the package came from, and what to do about it."""
+    out = []
+    if graph is not None and v.package.kind == "package":
+        route = _route(v.package, graph, g)
+        if route:
+            out.append(f"       {ink('via', 'dim')}  {ink(route, 'dim')}")
+
+    remedy = next((f.rule.fix for f in v.findings if f.rule.fix), "")
+    if remedy:
+        for i, chunk in enumerate(textwrap.wrap(remedy, w - 14)):
+            label = ink("fix", "accent") if i == 0 else "   "
+            out.append(f"       {label}  {chunk}")
+    return out
+
+
+def _route(pkg, graph, g: dict) -> str:
+    if graph.is_direct(pkg.ecosystem, pkg.name):
+        return ""
+    paths = graph.paths_to(pkg.ecosystem, pkg.name, limit=1)
+    if not paths:
+        return ""
+    return f" {g['chevron']} ".join(paths[0])
 
 
 def headline(report: Report) -> str | None:
@@ -268,6 +302,8 @@ def _summary(report: Report, ink: Ink, g: dict, span: int = 18) -> str:
             bits.append(ink(f"{counts[sev]} {sev}", sev))
     if report.suppressed:
         bits.append(ink(f"{report.suppressed} suppressed", "dim"))
+    if getattr(report, "baselined", 0):
+        bits.append(ink(f"{report.baselined} known", "dim"))
     if not sum(counts.values()):
         bits.append(ink("all clear", "clean"))
 
@@ -324,7 +360,8 @@ def terminal_diff(report, ink: Ink) -> str:
         out.append("")
 
     for v in report.flagged:
-        out.extend(_verdict_block(v, ink, g, w, uni, change=by_name.get(v.package.name)))
+        out.extend(_verdict_block(v, ink, g, w, uni, change=by_name.get(v.package.name),
+                                   graph=report.graph))
 
     # Everything that changed but came back clean still gets a line, because
     # "we looked and it was fine" is the answer a reviewer is usually after.
@@ -559,3 +596,51 @@ def _version() -> str:
     from . import __version__
 
     return __version__
+
+
+# --------------------------------------------------------------------------
+# why
+# --------------------------------------------------------------------------
+
+
+def why(report, matches: list, ink: Ink) -> str:
+    """Where a package came from, and what is wrong with it."""
+    w, g = width(), glyphs()
+    out = [""]
+
+    for verdict, pkg in matches:
+        title = f"{pkg.name} {pkg.version or pkg.spec or ''}".strip()
+        out.append(f"  {ink(title, 'bold')}  {ink(pkg.ecosystem, 'dim')}")
+        if pkg.origin:
+            out.append(f"  {ink(pkg.origin, 'dim')}")
+        out.append("")
+
+        graph = report.graph
+        if graph and graph.is_direct(pkg.ecosystem, pkg.name):
+            out.append(f"  {ink('asked for directly', 'clean')}")
+        elif graph and (routes := graph.paths_to(pkg.ecosystem, pkg.name, limit=3)):
+            out.append(f"  {ink('reached through', 'dim')}")
+            for route in routes:
+                trail = f" {g['chevron']} ".join(route[:-1])
+                out.append(f"    {trail} {ink(g['chevron'], 'dim')} {ink(route[-1], 'accent')}")
+        else:
+            out.append(f"  {ink('no path found; the lockfile does not record who asked for it', 'dim')}")
+        out.append("")
+
+        if verdict and verdict.findings:
+            out.append(f"  {ink('flagged', 'dim')}")
+            for f in verdict.findings:
+                out.append(f"    {ink(f.rule.id, 'rule')}  {f.rule.title}")
+                for line in f.evidence[:3]:
+                    for chunk in textwrap.wrap(line, w - 14) or [line]:
+                        out.append(f"            {ink(chunk, 'dim')}")
+            remedy = next((f.rule.fix for f in verdict.findings if f.rule.fix), "")
+            if remedy:
+                out.append("")
+                for i, chunk in enumerate(textwrap.wrap(remedy, w - 10)):
+                    out.append(f"  {ink('fix', 'accent') if i == 0 else '   '}  {chunk}")
+        else:
+            out.append(f"  {ink(g['trace'], 'clean')} nothing flagged")
+        out.append("")
+
+    return "\n".join(out)

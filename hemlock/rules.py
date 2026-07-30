@@ -20,7 +20,7 @@ import unicodedata
 from datetime import UTC, datetime, timedelta
 
 from .data import AFFIXES, CREDENTIAL_PATHS, HOMOGLYPHS, POPULAR
-from .model import Context, Package, rule
+from .model import RULES, Context, Package, rule
 from .provenance import describe
 from .pypi import normalize
 
@@ -865,3 +865,43 @@ def known_advisory(pkg: Package, ctx: Context):
     shown = ", ".join(advisories[:4])
     more = f" and {len(advisories) - 4} more" if len(advisories) > 4 else ""
     yield f"{len(advisories)} advisor{'y' if len(advisories) == 1 else 'ies'}: {shown}{more}"
+
+
+# --------------------------------------------------------------------------
+# what to do about it
+# --------------------------------------------------------------------------
+
+# One line per rule, imperative, no hedging. These are kept together rather
+# than spread through the decorators so the set can be read at once: a report
+# where every third entry says "investigate further" is a report nobody acts
+# on, and that only shows up when you see them side by side.
+REMEDIES = {
+    "HEM101": "Compare the name against what you meant to install, then find out which dependency asked for it.",
+    "HEM102": "Confirm the package against the project's own documentation, not against registry search results.",
+    "HEM103": "Nothing legitimate needs a look-alike character. Remove it.",
+    "HEM104": "If you meant the scoped package, the @scope is not optional.",
+    "HEM201": "Install with scripts off unless this package needs them: npm ci --ignore-scripts",
+    "HEM202": "Read the URL it fetches. If you cannot tell what it serves, do not install this.",
+    "HEM203": "There is no benign version of this. Remove it.",
+    "HEM204": "Treat every credential it could reach as exposed. Rotate first, investigate after.",
+    "HEM301": "Compare the published artifact against the package's own repository.",
+    "HEM302": "Check whether building code at runtime is what this package is for. Usually it is not.",
+    "HEM401": "Pin the version and commit a lockfile.",
+    "HEM402": "Regenerate the lockfile so the entry carries a hash.",
+    "HEM403": "Point the resolver at an https registry.",
+    "HEM404": "Pin to a commit rather than a branch, or move the dependency to the registry.",
+    "HEM405": "Replace the default index with --index-url rather than adding one with --extra-index-url.",
+    "HEM501": "Let the release age, or read the diff before taking it.",
+    "HEM502": "Check whether the new publisher appears in the project's repository or release notes.",
+    "HEM503": "Read the deprecation message, then move to whatever it points at.",
+    "HEM504": "Find out which dependency asked for this before trusting it.",
+    "HEM505": "Prefer a package whose source you can read.",
+    "HEM506": "Find out what the extra weight is before installing it.",
+    "HEM601": "Nothing to fix directly. It costs you the ability to check the tarball against the tag.",
+    "HEM602": "Confirm the maintainers control the repository the attestation names.",
+    "HEM701": "Remove it, then rotate every credential the install could reach.",
+    "HEM702": "Upgrade past the affected range. Look the ids up at osv.dev/vulnerability/<id>.",
+}
+
+for _rule_id, _remedy in REMEDIES.items():
+    RULES[_rule_id].fix = _remedy
