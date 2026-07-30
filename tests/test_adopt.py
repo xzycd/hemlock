@@ -7,7 +7,7 @@ import shutil
 import pytest
 
 from hemlock import baseline as baseline_mod
-from hemlock import brand, cli, scan
+from hemlock import brand, cli, scan, ui
 from hemlock import report as fmt
 from hemlock.model import RULES, Finding, Package
 from hemlock.policy import Policy
@@ -251,6 +251,71 @@ def test_animation_stays_off_under_ci(monkeypatch):
 
 def test_animation_stays_off_without_colour():
     assert not brand.wants_animation(color=False, stream=NotATty())
+
+
+def test_the_face_sits_beside_the_wordmark_when_there_is_room():
+    wide = brand.mark(face=True)
+    narrow = brand.mark(face=False)
+    assert len(wide) == len(narrow) == 5
+    assert all(len(w) > len(n) for w, n in zip(wide, narrow, strict=True))
+    assert all(w.startswith(n) for w, n in zip(wide, narrow, strict=True))
+
+
+def test_a_narrow_terminal_gets_the_wordmark_alone():
+    """Half a face wrapped onto the next line looks broken. No face looks
+    deliberate."""
+    assert not brand.wants_face(80)
+    assert brand.wants_face(120)
+    assert brand.mark(face=False) == brand.render()
+
+
+def test_the_face_is_drawn_from_the_same_two_characters_as_the_wordmark():
+    assert set("".join(brand.FACE)) <= {"█", " "}
+    assert len(brand.FACE) == len(brand.render())
+
+
+def test_the_whole_mark_still_lands_in_under_a_third_of_a_second():
+    columns = max(len(r) for r in brand.render())
+    frames = columns / brand.COLUMNS_PER_FRAME
+    assert frames * brand.FRAME_SECONDS + brand.FACE_BEAT < 0.34
+
+
+# -- motion ----------------------------------------------------------------
+
+
+def test_the_spinner_colour_walks_the_ramp_and_walks_back():
+    ink = fmt.Ink(24)
+    swing = 2 * len(ui.RAMP) - 2
+    seen = [ui.pulse("x", step, ink) for step in range(swing)]
+    assert len(set(seen)) == len(ui.RAMP)          # every stop gets used
+    assert seen[0] != seen[len(ui.RAMP) - 1]       # and the ends differ
+    assert ui.pulse("x", 0, ink) == ui.pulse("x", swing, ink)  # then it repeats
+
+
+def test_pulse_is_a_no_op_without_colour():
+    assert ui.pulse("x", 3, fmt.Ink(False)) == "x"
+
+
+def test_the_progress_bar_lights_its_leading_cell_apart_from_its_body():
+    """A block that holds still reads as a stalled job."""
+    ink = fmt.Ink(24)
+    line = fmt.progress_line("applying rules", 50, 100, ink, span=10, step=3)
+    assert ui.pulse("█", 3, ink) in line
+
+
+def test_a_progress_bar_without_colour_is_still_the_right_length():
+    line = fmt.progress_line("applying rules", 50, 100, fmt.Ink(False), span=10)
+    assert line.count("█") + line.count("░") == 10
+
+
+def test_rule_evaluation_reports_progress(project):
+    seen = []
+    report = scan.Report(root=project)
+    packages = scan.collect(project)[1]
+    scan.run_rules(report, Policy(), False, packages,
+                   progress=lambda done, total: seen.append((done, total)))
+    assert seen[0] == (1, len(packages))
+    assert seen[-1] == (len(packages), len(packages))
 
 
 def test_duration_reads_in_the_right_unit():

@@ -39,6 +39,10 @@ PALETTE = {
     "removed":  ("#7c7c8a", 243),
 }
 
+# Deep at the root, pale at the tip, like the stem the tool is named after.
+# The wordmark reads down it; the spinner cycles along it.
+RAMP = [("#e3c5ff", 183), ("#d3a8ff", 177), ("#c08cff", 171), ("#a76dfa", 135), ("#8b52ef", 99)]
+
 UNICODE = {
     "full": "●", "hollow": "○", "trace": "·",
     "line": "─", "tee": "├", "pipe": "│", "elbow": "└",
@@ -240,11 +244,27 @@ def spinner_frame(step: int) -> str:
     return frames[step % len(frames)]
 
 
-def progress_line(label: str, done: int, total: int, ink: Ink, span: int = 14) -> str:
+def pulse(text: str, step: int, ink: Ink) -> str:
+    """Walk the ramp and walk back, so the colour breathes instead of
+    restarting with a jolt every time it runs out of stops."""
+    if not ink.on:
+        return text
+    swing = 2 * len(RAMP) - 2
+    at = step % swing
+    return code(RAMP[at if at < len(RAMP) else swing - at], ink.depth) + text + RESET
+
+
+def progress_line(label: str, done: int, total: int, ink: Ink, span: int = 14,
+                  step: int | None = None) -> str:
+    """The bar's leading cell is lit separately from its body. A block that
+    holds still reads as a stalled job; a moving head reads as work."""
     g = glyphs()
+    step = done if step is None else step
     filled = round(span * done / total) if total else 0
-    bar = ink(g["on"] * filled, "accent") + ink(g["off"] * (span - filled), "dim")
+    bar = (ink(g["on"] * max(0, filled - 1), "accent")
+           + (pulse(g["on"], step, ink) if filled else "")
+           + ink(g["off"] * (span - filled), "dim"))
     return (
-        f"  {ink(spinner_frame(done), 'accent')} {ink(f'{label:<20}', 'dim')}"
+        f"  {pulse(spinner_frame(step), step, ink)} {ink(f'{label:<20}', 'dim')}"
         f"{bar}  {ink(f'{done}/{total}', 'dim')}"
     )

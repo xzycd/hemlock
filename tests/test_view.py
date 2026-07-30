@@ -362,3 +362,32 @@ def test_the_generated_workflow_posts_its_report(tmp_path):
     assert "--format markdown" in workflow
     assert "gh pr comment" in workflow and "--edit-last" in workflow
     assert "pull-requests: write" in workflow
+
+
+def test_no_workflow_carries_a_publish_credential():
+    """The release workflow publishes over OIDC. A stored token appearing in
+    here later would be the exact failure this project is about."""
+    root = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows")
+    for name in os.listdir(root):
+        text = open(os.path.join(root, name)).read().lower()
+        assert "pypi_api_token" not in text, name
+        assert "password:" not in text, name
+        assert "twine upload" not in text, name
+
+
+def test_the_release_workflow_asks_for_attestations():
+    path = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows", "release.yml")
+    text = open(path).read()
+    assert "attestations: true" in text
+    assert "id-token: write" in text
+
+
+def test_the_generated_workflow_installs_from_somewhere_that_exists(tmp_path):
+    """`pip install hemlock-scan` shipped in this file for three releases and
+    fails, because nothing of that name is on PyPI. Anyone running
+    `hemlock init` got a workflow that could not run."""
+    cli.main(["init", str(tmp_path), "--color", "never"])
+    workflow = (tmp_path / ".github" / "workflows" / "hemlock.yml").read_text()
+    install = [x for x in workflow.splitlines() if "pip install" in x or "pipx install" in x]
+    assert install, "the workflow never installs hemlock"
+    assert all("github.com/xzycd/hemlock" in x for x in install)

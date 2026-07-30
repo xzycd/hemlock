@@ -4,7 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hemlock-scan"
-version = "0.3.0"
+# Read from hemlock/__init__.py rather than written twice. The two drifted
+# once already, which shipped a wheel labelled with the previous release.
+dynamic = ["version"]
 description = "Supply-chain scanner for npm and PyPI. Flags packages that behave like an attack, not just ones with a CVE."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -35,6 +37,9 @@ hemlock = "hemlock.cli:run"
 Homepage = "https://github.com/xzycd/hemlock"
 Source = "https://github.com/xzycd/hemlock"
 Issues = "https://github.com/xzycd/hemlock/issues"
+
+[tool.hatch.version]
+path = "hemlock/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["hemlock"]

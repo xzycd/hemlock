@@ -96,15 +96,20 @@ is.
 
 ## Install
 
-```bash
-pip install hemlock-scan
-```
-
-Or run it without installing anything:
+Not on PyPI yet. Install it from here:
 
 ```bash
-pipx run hemlock-scan scan .
+pipx install git+https://github.com/xzycd/hemlock
 ```
+
+Or without pipx, into any environment you like:
+
+```bash
+pip install git+https://github.com/xzycd/hemlock
+```
+
+Python 3.11 or newer, and nothing else. When `hemlock-scan` reaches PyPI this
+becomes `pipx install hemlock-scan`.
 
 ## Use
 
@@ -423,7 +428,7 @@ you can write it yourself. Gate a pull request on what it introduces rather
 than on the whole tree:
 
 ```yaml
-- run: pipx install hemlock-scan
+- run: pipx install git+https://github.com/xzycd/hemlock
 - run: hemlock diff --since origin/${{ github.base_ref }} --online --fail-on high
 ```
 
@@ -501,10 +506,18 @@ None of that is allowed to move a column. Every row is placed by measuring
 visible width with the escapes stripped, and a test renders the same scan with
 links on and off and asserts the two come out the same shape.
 
-The wordmark animates once, on `hemlock` with no arguments, for about 200ms. It
-is off under CI, off without a terminal, off without colour, and off when
+The wordmark animates once, on `hemlock` with no arguments, in about a quarter
+of a second: the letters sweep in left to right, then the face lands. It is off
+under CI, off without a terminal, off without colour, and off when
 `HEMLOCK_NO_ANIMATION` is set. Anything that delays a pipe or corrupts a
 redirect has stopped being decoration and started being a bug.
+
+A scan shows a spinner whose colour walks up the purple ramp and back, over a
+bar whose leading cell is lit separately from its body, because a block that
+holds still reads as a stalled job. It is driven by real progress through the
+package list, and nothing is drawn for the first 150ms, so a scan that finishes
+in three milliseconds goes past in silence and only a project big enough to
+make you wait ever animates.
 
 ## Zero dependencies, on purpose
 
@@ -604,6 +617,24 @@ characters, and the URLs point at `.invalid` domains that cannot resolve. CI
 asserts that it still comes back critical, so a rule that silently stops firing
 breaks the build instead of the next release. See
 [examples/README.md](examples/README.md) for the full map of what trips what.
+
+## Releasing
+
+Tagging a commit publishes it. There is no API token in this repository and
+there is not meant to be one: `.github/workflows/release.yml` uses PyPI trusted
+publishing, so the upload is signed with a short-lived identity minted for that
+one workflow run and there is no long-lived secret to steal.
+
+The same run attaches PEP 740 attestations. A tool that flags packages for
+shipping without build provenance has no business shipping without build
+provenance, so hemlock passes its own `HEM601`.
+
+The workflow refuses to publish if the tag does not match `__version__`, if the
+tests fail, or if the known-bad fixture has stopped being flagged.
+
+```bash
+git tag v0.4.0 && git push origin v0.4.0
+```
 
 ## Roadmap
 

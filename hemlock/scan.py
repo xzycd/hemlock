@@ -104,13 +104,14 @@ def run(root: str, policy: Policy, online: bool = False, progress=None) -> Repor
                 f"(first: {http.failures[0]})"
             )
 
-    run_rules(report, policy, online, packages, ctx)
+    run_rules(report, policy, online, packages, ctx,
+              progress=_stage(progress, "applying rules"))
     report.elapsed = time.perf_counter() - started
     return report
 
 
-def run_rules(report: Report, policy: Policy, online: bool,
-              packages: list[Package], ctx: Context | None = None) -> None:
+def run_rules(report: Report, policy: Policy, online: bool, packages: list[Package],
+              ctx: Context | None = None, progress=None) -> None:
     """Apply every active rule to every package and fill in the verdicts.
 
     Shared with `hemlock diff`, which runs the same rules over a much
@@ -120,7 +121,9 @@ def run_rules(report: Report, policy: Policy, online: bool,
                          fresh_days=policy.fresh_days)
     checks = list(active_rules(online, policy.disable))
 
-    for pkg in packages:
+    for done, pkg in enumerate(packages, start=1):
+        if progress:
+            progress(done, len(packages))
         findings: list[Finding] = []
         # A manifest entry stands in for a file, so only the configuration
         # rules apply to it. A filename cannot be a typosquat.

@@ -37,6 +37,35 @@ changed is how much of it you can take in without reading.
   is what you are looking for. `hemlock rules` draws each weight beside its
   number. `hemlock explain` ends with the remedy.
 
+- **A face.** Socrates drank hemlock, so the eyes are crossed out. It sits
+  beside the wordmark and arrives a beat after the letters finish drawing.
+  Terminals under 88 columns get the wordmark alone, because half a face
+  wrapped onto the next line looks broken while no face looks deliberate.
+
+- **Motion during a scan.** The spinner's colour walks up the purple ramp and
+  back, over a bar whose leading cell is lit separately from its body. It runs
+  on offline scans too, driven by real progress through the package list rather
+  than a timer. Nothing is drawn for the first 150ms, so only a project big
+  enough to make you wait ever sees it.
+
+- **A release workflow.** Tagging publishes to PyPI over trusted publishing,
+  with no API token in the repository, and attaches PEP 740 attestations. It
+  refuses to publish if the tag does not match `__version__`, if the tests
+  fail, or if the known-bad fixture has stopped being flagged.
+
+### Fixed
+
+- **The documented install command never worked.** `pip install hemlock-scan`
+  and `pipx run hemlock-scan` have been in the README since 0.1 and nothing of
+  that name has ever been on PyPI. That instruction was also written into the
+  CI workflow `hemlock init` generates, so anyone who ran `init` got a pipeline
+  that failed on its first run. Both now install from the repository, and a
+  test pins it.
+
+- **The version was written in two places and drifted.** `pyproject.toml` said
+  `0.3.0` while the package said `0.4.0`, so the wheel carried the previous
+  release number. Hatchling now reads it from `hemlock/__init__.py`.
+
 ### Changed
 
 - Drawing primitives moved out of `report.py` into `ui.py`. `report.py` decides
