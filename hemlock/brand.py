@@ -17,6 +17,8 @@ import os
 import sys
 import time
 
+from .ui import RESET, code
+
 GLYPHS = {
     "h": ["█ █", "█ █", "███", "█ █", "█ █"],
     "e": ["███", "█  ", "██ ", "█  ", "███"],
@@ -28,9 +30,10 @@ GLYPHS = {
 }
 
 # Deep at the root, pale at the tip, like the stem the tool is named after.
-RAMP = ["\033[38;5;183m", "\033[38;5;177m", "\033[38;5;171m", "\033[38;5;135m", "\033[38;5;99m"]
-SWEEP = "\033[38;5;225m"
-RESET = "\033[0m"
+# Each stop is (direct colour, 256-palette fallback).
+RAMP = [("#e3c5ff", 183), ("#d3a8ff", 177), ("#c08cff", 171), ("#a76dfa", 135), ("#8b52ef", 99)]
+SWEEP = ("#ffffff", 225)
+TAIL = ("#7c7c8a", 243)
 
 TAGLINE = "poison hemlock looks like parsley"
 # Two columns a frame at 6ms lands the whole reveal near 200ms. Slower than
@@ -53,20 +56,22 @@ def render(word: str = "hemlock", scale: int = 2) -> list[str]:
     return rows
 
 
-def paint(rows: list[str], columns: int | None = None, highlight: int | None = None) -> list[str]:
+def paint(rows: list[str], depth: int = 8, columns: int | None = None,
+          highlight: int | None = None) -> list[str]:
     """Colour the wordmark, optionally revealed only up to `columns`."""
     out = []
     for r, row in enumerate(rows):
+        tint, sweep = code(RAMP[r], depth), code(SWEEP, depth)
         visible = row if columns is None else row[:columns]
         if highlight is not None and 0 <= highlight < len(visible):
             head, tail = visible[:highlight], visible[highlight + 1:]
-            out.append(f"{RAMP[r]}{head}{SWEEP}{visible[highlight]}{RAMP[r]}{tail}{RESET}")
+            out.append(f"{tint}{head}{sweep}{visible[highlight]}{tint}{tail}{RESET}")
         else:
-            out.append(f"{RAMP[r]}{visible}{RESET}")
+            out.append(f"{tint}{visible}{RESET}")
     return out
 
 
-def wants_animation(color: bool, stream=None) -> bool:
+def wants_animation(color: bool | int, stream=None) -> bool:
     stream = stream or sys.stdout
     return bool(
         color
@@ -76,8 +81,9 @@ def wants_animation(color: bool, stream=None) -> bool:
     )
 
 
-def logo(color: bool = True, animate: bool = False, version: str = "", stream=None) -> str:
+def logo(color: bool | int = True, animate: bool = False, version: str = "", stream=None) -> str:
     """The full mark. Animates in place when asked, then returns the final frame."""
+    depth = (8 if color else 0) if isinstance(color, bool) else int(color)
     stream = stream or sys.stdout
     rows = render()
     width = max(len(r) for r in rows)
@@ -87,21 +93,16 @@ def logo(color: bool = True, animate: bool = False, version: str = "", stream=No
         for step in range(0, width + COLUMNS_PER_FRAME, COLUMNS_PER_FRAME):
             if step:
                 stream.write(f"\033[{len(rows)}A")
-            frame = paint(rows, columns=step, highlight=step - 1)
+            frame = paint(rows, depth, columns=step, highlight=step - 1)
             stream.write("".join(f"\r\033[K  {line}\n" for line in frame))
             stream.flush()
             time.sleep(FRAME_SECONDS)
         stream.write(f"\033[{len(rows)}A")
 
-    body = paint(rows) if color else rows
+    body = paint(rows, depth) if depth else rows
     lines = ["", *[f"  {line}" for line in body]]
 
     tail = TAGLINE if not version else f"{TAGLINE}   v{version}"
-    lines.append(f"  \033[38;5;243m{tail}\033[0m" if color else f"  {tail}")
+    lines.append(f"  {code(TAIL, depth)}{tail}{RESET}" if depth else f"  {tail}")
     lines.append("")
     return "\n".join(lines)
-
-
-def sigil(color: bool = True) -> str:
-    """The one-line mark used in headers, where five rows would be rude."""
-    return "\033[38;5;141m\033[1mhemlock\033[0m" if color else "hemlock"

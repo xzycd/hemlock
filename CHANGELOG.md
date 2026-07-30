@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.4.0
+
+The theme is the view. Every rule and every score from 0.3 is unchanged; what
+changed is how much of it you can take in without reading.
+
+### Added
+
+- **A severity rail and a score gauge on every result.** The coloured edge
+  down the left groups a package with its findings, and the bar in front of the
+  number lets you rank eight results without reading any of them.
+
+- **Direct colour.** The palette carries a 24-bit value and a 256-palette
+  fallback for every entry, chosen from `COLORTERM`, `TERM` and `TERM_PROGRAM`.
+  `--color always` now beats `NO_COLOR`, on the grounds that a flag typed just
+  now is more specific than a variable exported months ago.
+
+- **Clickable output.** Package names open their registry page and advisory ids
+  open osv.dev, over OSC 8. Terminals that do not implement it ignore it; files
+  and pipes do not, so links switch off when stdout is not a terminal.
+
+- **`--format markdown`**, for scan and diff. Writes a GitHub callout, a table
+  of findings and a folded evidence block, with a hidden marker so
+  `gh pr comment --edit-last` replaces its own comment instead of stacking a
+  new one on every push. `hemlock init` now writes that workflow.
+
+- **A designed all-clear.** A clean scan says how much was read and, more
+  usefully, which checks did not run. Anything else reads as a promise the tool
+  cannot make.
+
+- **A box around reported malware**, replacing the loose banner. It is the only
+  box in the output, because the one rule that is not a judgement call should
+  not look like the ones that are.
+
+- `hemlock why` draws a route as a staircase rather than one line, since depth
+  is what you are looking for. `hemlock rules` draws each weight beside its
+  number. `hemlock explain` ends with the remedy.
+
+### Changed
+
+- Drawing primitives moved out of `report.py` into `ui.py`. `report.py` decides
+  what goes on a line, `ui.py` decides how it looks.
+- The ASCII fallback uses `+` for a finding branch so it stays distinguishable
+  from the rail beside it.
+- No line carries trailing whitespace.
+- Counts of one are no longer pluralised.
+- Repository links point at `github.com/xzycd/hemlock`, which is where the
+  repository actually is.
+
 ## 0.3.0
 
 The theme is adoption. Version 0.2 could tell you a lot about a codebase and

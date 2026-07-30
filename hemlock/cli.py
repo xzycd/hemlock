@@ -63,7 +63,7 @@ def _shared(sp) -> None:
     sp.add_argument("--online", action="store_true", help="add registry, provenance and OSV checks")
     sp.add_argument("--fresh-days", type=int, metavar="N", help="how new a release counts as fresh (default 14)")
     sp.add_argument("--fail-on", choices=SEVERITY_ORDER + ["never"], help="exit non-zero at this severity")
-    sp.add_argument("--format", choices=["terminal", "json", "sarif"], default="terminal")
+    sp.add_argument("--format", choices=["terminal", "markdown", "json", "sarif"], default="terminal")
     sp.add_argument("--config", metavar="FILE", help="path to .hemlock.toml")
     sp.add_argument("--color", choices=["auto", "always", "never"], default="auto")
     sp.add_argument("--ignore-baseline", action="store_true",
@@ -74,13 +74,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:
-        print(brand.logo(color=fmt.want_color("auto"),
-                         animate=brand.wants_animation(fmt.want_color("auto")),
-                         version=__version__))
+        depth = fmt.color_depth("auto")
+        print(brand.logo(color=depth, animate=brand.wants_animation(depth), version=__version__))
         parser.print_help()
         return 0
 
-    ink = fmt.Ink(fmt.want_color(args.color))
+    ink = fmt.Ink(fmt.color_depth(args.color), links=fmt.wants_links())
 
     if args.command == "explain":
         rule = RULES.get(args.rule.upper())
@@ -111,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
 def _progress_for(args):
     if args.format != "terminal" or not args.online or not sys.stderr.isatty():
         return None
-    ink = fmt.Ink(args.color != "never")
+    ink = fmt.Ink(fmt.color_depth(args.color, sys.stderr))
 
     def report(label: str, done: int, total: int) -> None:
         print("\r\033[K" + fmt.progress_line(label, done, total, ink), end="", file=sys.stderr, flush=True)
@@ -175,6 +174,8 @@ def _scan(args, ink: fmt.Ink) -> int:
         print(fmt.as_json(report))
     elif args.format == "sarif":
         print(fmt.as_sarif(report))
+    elif args.format == "markdown":
+        print(fmt.as_markdown(report))
     else:
         if not report.manifests:
             print(f"\n  no npm or Python manifests under {args.path}\n", file=sys.stderr)
@@ -232,6 +233,8 @@ def _diff(args, ink: fmt.Ink) -> int:
         print(fmt.as_json_diff(report))
     elif args.format == "sarif":
         print(fmt.as_sarif(report))
+    elif args.format == "markdown":
+        print(fmt.as_markdown_diff(report))
     else:
         print(fmt.terminal_diff(report, ink))
 
@@ -253,6 +256,10 @@ on:
   push:
     branches: [main, master]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   supply-chain:
     runs-on: ubuntu-latest
@@ -267,9 +274,30 @@ jobs:
 
       # On a pull request, judge what the branch adds rather than the whole
       # tree. Everything already in the lockfile was somebody else's decision.
+      # The comment goes up either way, so a passing scan still leaves a record
+      # of what was checked.
       - name: scan the change
+        id: scan
         if: github.event_name == 'pull_request'
-        run: hemlock diff --since origin/${{ github.base_ref }} --online --fail-on high
+        continue-on-error: true
+        run: |
+          hemlock diff --since origin/${{ github.base_ref }} --online \\
+            --format markdown --fail-on high > hemlock.md
+
+      # A pull request from a fork gets a read-only token, so the comment
+      # cannot be posted. That is not a reason to fail the scan.
+      - name: comment on the pull request
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.number }} --body-file hemlock.md \\
+            --edit-last --create-if-none
+
+      - name: fail if the change introduced something
+        if: steps.scan.outcome == 'failure'
+        run: exit 1
 
       - name: scan everything
         if: github.event_name != 'pull_request'
