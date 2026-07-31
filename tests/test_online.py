@@ -358,6 +358,29 @@ import pytest  # noqa: E402
 from hemlock import cli, update  # noqa: E402
 
 
+def test_the_command_is_printed_before_it_runs():
+    """The child inherits stdout and writes immediately; our own prints are
+    buffered whenever stdout is a pipe. Redirected to a file or read back from
+    a CI log, that put all of pip's output above the line saying what was
+    about to run. `capture_output` here is the pipe that provokes it."""
+    import subprocess
+    import sys
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script = (
+        "from hemlock.update import run;"
+        "print('ANNOUNCE');"
+        "run([__import__('sys').executable, '-c', \"print('CHILD')\"])"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, cwd=root, check=False,
+    )
+    assert "ANNOUNCE" in out.stdout and "CHILD" in out.stdout, out.stderr
+    assert out.stdout.index("ANNOUNCE") < out.stdout.index("CHILD"), (
+        f"the command ran before it was announced:\n{out.stdout}"
+    )
+
+
 @pytest.mark.parametrize("text, expected", [
     ("0.5.0", (0, 5, 0)),
     ("v0.5.0", (0, 5, 0)),

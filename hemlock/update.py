@@ -78,6 +78,14 @@ def _repo_root() -> str:
 
 
 def run(command: list[str]) -> int:
+    # The child inherits this process's stdout and writes to it straight away,
+    # while our own prints are still sitting in a buffer whenever stdout is a
+    # pipe rather than a terminal. Redirected to a file or read from a CI log,
+    # that put the whole of pip's output above the line explaining what was
+    # about to run. Flushing here rather than at the call site because this is
+    # the one place the file descriptor changes hands.
+    sys.stdout.flush()
+    sys.stderr.flush()
     try:
         return subprocess.run(command, check=False).returncode
     except (OSError, subprocess.SubprocessError) as exc:
