@@ -99,7 +99,7 @@ HEADLINES = [
 # --------------------------------------------------------------------------
 
 
-def terminal(report: Report, ink: Ink, show_all: bool = False) -> str:
+def terminal(report: Report, ink: Ink, show_all: bool = False, fail_on: str = "") -> str:
     w, g = width(), ui.glyphs()
     uni = g is UNICODE
     out: list[str] = [""]
@@ -122,13 +122,94 @@ def terminal(report: Report, ink: Ink, show_all: bool = False) -> str:
     if not shown:
         out.extend(_all_clear(report, ink, w))
 
+    # A rule flagging thirty packages on its own is one observation about a
+    # project, not thirty. Printing it thirty times is how the finding that
+    # actually failed the build ends up somewhere in the middle of a scroll.
+    crowds = _crowds(shown, fail_on)
+    penned = {id(v) for group in crowds for v in group}
+
     for v in shown:
-        out.extend(_verdict_block(v, ink, g, w, uni, graph=report.graph))
+        if id(v) not in penned:
+            out.extend(_verdict_block(v, ink, g, w, uni, graph=report.graph))
+    for group in crowds:
+        out.extend(_crowd_block(group, ink, g, w))
 
     out.append(_summary(report, ink, g))
+    out.extend(_verdict_line(report, ink, g, w, fail_on))
     out.extend(_footer(report, ink, g))
     out.append("")
     return _page(out)
+
+
+# Below this a group is not worth collapsing; you may as well read them.
+CROWD_MIN = 5
+# High and critical are never collapsed, whatever the threshold is set to.
+CROWD_SEVERITIES = ("low", "medium")
+SEVERITY_RANK = ["low", "medium", "high", "critical"]
+
+
+def _crowds(shown: list, fail_on: str = "") -> list[list]:
+    """Packages flagged by exactly one rule, grouped where that rule is
+    flagging a crowd of them.
+
+    Nothing at or above the failing threshold is ever folded. Whatever broke
+    the build gets its own block, however many of them there are.
+    """
+    ceiling = len(SEVERITY_RANK)
+    if fail_on in SEVERITY_RANK:
+        ceiling = SEVERITY_RANK.index(fail_on)
+
+    solo: dict[str, list] = {}
+    for v in shown:
+        if len(v.findings) != 1 or v.severity not in CROWD_SEVERITIES:
+            continue
+        if SEVERITY_RANK.index(v.severity) >= ceiling:
+            continue
+        solo.setdefault(v.findings[0].rule.id, []).append(v)
+    groups = [g for g in solo.values() if len(g) >= CROWD_MIN]
+    return sorted(groups, key=lambda g: -max(v.score for v in g))
+
+
+def _crowd_block(group: list, ink: Ink, g: dict, w: int) -> list[str]:
+    """One rule, every package it caught. Nothing is hidden: the names are all
+    here, they are just not each given five lines of their own."""
+    worst = max(group, key=lambda v: v.score)
+    sev, rule = worst.severity, group[0].findings[0].rule
+    bar = f"  {rail(ink, sev)} "
+
+    left = (f"{bar}{gauge(worst.score, sev, ink)}{ink(f'{worst.score:>5}', sev, 'bold')}"
+            f"  {ink(rule.id, 'rule')}  {rule.title}")
+    label = ink(plural(len(group), "package"), sev)
+    lines = [left + " " * max(1, w - visible(left) - visible(label)) + label]
+
+    names = ", ".join(sorted(v.package.name for v in group))
+    for chunk in textwrap.wrap(names, w - INDENT - 4):
+        lines.append(f"{bar}  {ink(chunk, 'dim')}")
+    if rule.fix:
+        for i, chunk in enumerate(textwrap.wrap(rule.fix, w - INDENT - 9)):
+            lines.append(f"{bar}  {ink('fix', 'accent') if i == 0 else '   '}  {chunk}")
+    lines.append("")
+    return lines
+
+
+def _verdict_line(report, ink: Ink, g: dict, w: int, fail_on: str) -> list[str]:
+    """Why the exit code is what it is, naming the packages responsible.
+
+    Without this, a project with forty low findings and one high one gives you
+    a wall of output and a `1`, and no way to tell which line caused it.
+    """
+    if fail_on not in SEVERITY_RANK:
+        return []
+    blame = [v for v in report.flagged
+             if v.severity in SEVERITY_RANK
+             and SEVERITY_RANK.index(v.severity) >= SEVERITY_RANK.index(fail_on)]
+    if not blame:
+        return []
+    names = ", ".join(v.package.name for v in blame[:4])
+    if len(blame) > 4:
+        names += f", and {len(blame) - 4} more"
+    return [f"  {ink('exit 1', 'critical', 'bold')}  "
+            + ink(f"{plural(len(blame), 'package')} at {fail_on} or above: {names}", "dim")]
 
 
 def _page(lines: list[str]) -> str:

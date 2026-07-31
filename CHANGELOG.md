@@ -48,6 +48,16 @@ changed is how much of it you can take in without reading.
   than a timer. Nothing is drawn for the first 150ms, so only a project big
   enough to make you wait ever sees it.
 
+- **Repeated findings group.** One rule flagging thirty packages now prints
+  once, with all thirty names, instead of thirty times with five lines each.
+  Nothing at or above the `--fail-on` threshold is ever grouped, and critical
+  and high never are, so whatever failed the build always gets its own block.
+
+- **A scan that exits 1 says why**, and names the packages responsible. A wall
+  of low-severity findings with a bare `1` at the end gives you no way to tell
+  which line caused it, which is how a failing build becomes a build people
+  rerun.
+
 - **A release workflow.** Tagging publishes to PyPI over trusted publishing,
   with no API token in the repository, and attaches PEP 740 attestations. It
   refuses to publish if the tag does not match `__version__`, if the tests
