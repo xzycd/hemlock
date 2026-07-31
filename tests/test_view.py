@@ -477,6 +477,17 @@ def test_no_workflow_carries_a_publish_credential():
         assert "twine upload" not in text, name
 
 
+def test_the_github_release_does_not_queue_behind_pypi():
+    """v0.5.0 built a correct wheel and produced no release at all: the PyPI
+    trusted publisher was not registered yet, and github-release was waiting
+    on publish. Two channels, one misconfigured, nothing shipped."""
+    path = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows", "release.yml")
+    jobs = open(path).read().split("\n  github-release:")
+    assert len(jobs) == 2, "github-release job went missing"
+    depends = [x for x in jobs[1].splitlines() if x.strip().startswith("needs:")]
+    assert depends and "publish" not in depends[0], depends
+
+
 def test_the_release_workflow_asks_for_attestations():
     path = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows", "release.yml")
     text = open(path).read()
