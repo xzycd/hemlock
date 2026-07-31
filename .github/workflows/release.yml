@@ -77,8 +77,14 @@ jobs:
         with:
           attestations: true
 
+  # Depends on build, not on publish. v0.5.0 built a correct wheel and then
+  # produced no release at all, because the PyPI trusted publisher had not
+  # been registered yet and github-release was queued behind it. The two are
+  # separate distribution channels and one being misconfigured is not a
+  # reason to withhold the other, least of all while PyPI is still empty and
+  # the GitHub release is the only place the artifacts exist.
   github-release:
-    needs: publish
+    needs: build
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
