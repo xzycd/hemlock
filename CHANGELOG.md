@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`hemlock update` announced the command after running it.** The child
+  process inherits stdout and writes to it immediately, while hemlock's own
+  prints sit in a buffer whenever stdout is a pipe rather than a terminal.
+  Redirected to a file or read back from a CI log, the whole of pip's output
+  came out above the line explaining what was about to run. Interactive use
+  was never affected, which is why it survived the release.
+
 ## 0.5.1
 
 The first release that is actually on PyPI. 0.5.0 built a correct wheel and
