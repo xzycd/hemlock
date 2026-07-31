@@ -409,7 +409,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install git+https://github.com/xzycd/hemlock
+      - run: pip install hemlock-scan
 
       # On a pull request, judge what the branch adds rather than the whole
       # tree. Everything already in the lockfile was somebody else's decision.

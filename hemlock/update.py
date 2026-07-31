@@ -5,9 +5,10 @@ is that installing software is dangerous should not be the thing that quietly
 pipes a download into your interpreter. It works out the exact command, shows
 it to you, and runs it only if you say so.
 
-The command adapts to where the release actually is. `hemlock-scan` is not on
-PyPI yet, so the upgrade path is the repository; the day the first release
-lands, PyPI answers and this switches over on its own with nothing to edit.
+The command adapts to where the release actually is. It asks PyPI first and
+falls back to the repository's tags, so a copy installed from git before 0.5.0
+reached PyPI still upgrades, and one installed from PyPI is told to use pip.
+Neither path is hard-coded to a version.
 """
 
 from __future__ import annotations

@@ -68,6 +68,8 @@ class Registry:
         version = version or (doc.get("dist-tags") or {}).get("latest")
         entry = versions.get(version) or {}
         meta: dict = {}
+        if version:
+            meta["resolved_version"] = version
 
         if published := _parse_time(times.get(version)):
             meta["published_at"] = published
@@ -150,6 +152,15 @@ class Registry:
 
         if sizes := [f["size"] for f in files if f.get("size")]:
             meta["unpacked_size"] = max(sizes)
+
+        # A bare name means "whatever PyPI serves today", which the versionless
+        # document already answers. Resolving it the way the npm branch does
+        # matters for more than tidiness: provenance is looked up per file, so
+        # skipping this made `hemlock check <name>` report every signed package
+        # as having no attestation, hemlock's own release included.
+        version = version or info.get("version")
+        if version:
+            meta["resolved_version"] = version
 
         # PEP 740 attestations attach to a file, so prefer the wheel.
         target = next((f for f in files if f.get("packagetype") == "bdist_wheel"), files[0] if files else None)

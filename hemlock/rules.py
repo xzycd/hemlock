@@ -673,7 +673,12 @@ def fresh_release(pkg: Package, ctx: Context):
     if age < timedelta(days=ctx.fresh_days):
         hours = int(age.total_seconds() // 3600)
         when = f"{hours} hours ago" if hours < 48 else f"{age.days} days ago"
-        yield f"{pkg.version} published {when}"
+        # A bare name on the command line carries no version of its own, and
+        # this read "None published 3 hours ago". The registry says which
+        # version it answered with; `pkg.version` stays whatever the manifest
+        # pinned, because `floating_version` reads it to mean exactly that.
+        which = pkg.version or pkg.meta.get("resolved_version")
+        yield f"{which} published {when}" if which else f"published {when}"
 
 
 @rule(

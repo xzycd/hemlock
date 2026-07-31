@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.1
+
+The first release that is actually on PyPI. 0.5.0 built a correct wheel and
+uploaded nothing, because the trusted publisher had not been registered yet.
+
+### Fixed
+
+- **`hemlock check <name>` no longer calls signed packages unsigned.** PEP 740
+  attestations attach to a file, so finding one needs a version. The npm branch
+  resolved `latest` before looking and the PyPI branch did not, so a name given
+  without a version skipped the lookup entirely and HEM601 fired on everything.
+  hemlock's own release was the first thing it accused, which is how this was
+  found: `hemlock check hemlock-scan --online` reported no build provenance for
+  an artifact whose attestation is on PyPI right now.
+
+- **A fresh release names the version it found.** HEM501 read `None published
+  0 hours ago` for a package named without one. The registry now records what
+  it resolved, and `pkg.version` still means what the manifest pinned, because
+  HEM401 reads it to mean exactly that.
+
+### Changed
+
+- **Install instructions point at PyPI again.** `pipx install hemlock-scan`,
+  and the workflow written by `hemlock init` installs the same. They pointed
+  at git for three releases because nothing of that name was published. The
+  test that guarded it now reads the distribution name out of `pyproject.toml`
+  instead of hard-coding a URL, so a rename cannot go out while every
+  generated workflow still names the old one.
+
+- `hemlock update` needed no change to switch over. It asks PyPI first and
+  falls back to the repository's tags, so a copy installed from git before
+  0.5.0 landed still upgrades, and one installed from PyPI is told to use pip.
+
 ## 0.5.0
 
 The theme is scale. A tool that is pleasant on a twelve package example and

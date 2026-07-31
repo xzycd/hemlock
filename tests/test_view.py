@@ -517,12 +517,22 @@ def test_ci_runs_on_pushes_to_the_default_branch():
     assert "branches: [main, master]" in open(path).read()
 
 
-def test_the_generated_workflow_installs_from_somewhere_that_exists(tmp_path):
-    """`pip install hemlock-scan` shipped in this file for three releases and
-    fails, because nothing of that name is on PyPI. Anyone running
-    `hemlock init` got a workflow that could not run."""
+def test_the_generated_workflow_installs_the_name_this_project_publishes(tmp_path):
+    """`pip install hemlock-scan` shipped in this file for three releases while
+    nothing of that name was on PyPI, so anyone running `hemlock init` got a
+    workflow that could not run. It is published now and the instruction points
+    back at PyPI. What is left to pin offline is that the workflow installs the
+    name the project actually builds under, so a rename cannot quietly go out
+    while every generated workflow keeps naming the old one."""
+    import tomllib
+
+    root = os.path.join(os.path.dirname(__file__), "..")
+    with open(os.path.join(root, "pyproject.toml"), "rb") as fh:
+        distribution = tomllib.load(fh)["project"]["name"]
+
     cli.main(["init", str(tmp_path), "--color", "never"])
     workflow = (tmp_path / ".github" / "workflows" / "hemlock.yml").read_text()
     install = [x for x in workflow.splitlines() if "pip install" in x or "pipx install" in x]
     assert install, "the workflow never installs hemlock"
-    assert all("github.com/xzycd/hemlock" in x for x in install)
+    for line in install:
+        assert distribution in line, f"installs something other than {distribution}: {line.strip()}"
