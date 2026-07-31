@@ -1,0 +1,96 @@
+name: release
+
+# Tag a commit and this publishes it. There is no API token in this
+# repository and there is not meant to be one: PyPI trusted publishing signs
+# the upload with a short-lived OIDC identity minted for this workflow run.
+#
+# A tool that flags packages for shipping without build provenance has no
+# business shipping without build provenance. The publish step attaches PEP 740
+# attestations, so `hemlock scan --online` run against hemlock itself passes
+# its own HEM601.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The tag is what a person reads; hemlock/__init__.py is what the wheel
+      # carries. Those two drifted once already and shipped a wheel labelled
+      # with the previous release.
+      - name: the tag must match the package version
+        if: github.ref_type == 'tag'
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(python -c "import hemlock; print(hemlock.__version__)")
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match hemlock $version"
+            exit 1
+          fi
+          echo "publishing $version"
+
+      - run: pip install -e ".[dev]"
+      - run: ruff check hemlock tests
+      - run: pytest -q
+
+      - name: the known-bad fixture must still be caught
+        run: |
+          hemlock scan examples/compromised-app --fail-on critical && {
+            echo "::error::refusing to release: the fixture stopped being flagged"
+            exit 1
+          } || echo "fixture flagged as expected"
+
+      - run: pip install build
+      - run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/hemlock-scan
+    permissions:
+      # The only credential involved. A stored token is a secret that can be
+      # stolen, and this project exists because publish credentials get stolen.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true
+
+  github-release:
+    needs: publish
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --title "$GITHUB_REF_NAME" --generate-notes

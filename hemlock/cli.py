@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 
 from . import __version__, brand, scan
 from . import baseline as baseline_mod
@@ -63,7 +64,7 @@ def _shared(sp) -> None:
     sp.add_argument("--online", action="store_true", help="add registry, provenance and OSV checks")
     sp.add_argument("--fresh-days", type=int, metavar="N", help="how new a release counts as fresh (default 14)")
     sp.add_argument("--fail-on", choices=SEVERITY_ORDER + ["never"], help="exit non-zero at this severity")
-    sp.add_argument("--format", choices=["terminal", "json", "sarif"], default="terminal")
+    sp.add_argument("--format", choices=["terminal", "markdown", "json", "sarif"], default="terminal")
     sp.add_argument("--config", metavar="FILE", help="path to .hemlock.toml")
     sp.add_argument("--color", choices=["auto", "always", "never"], default="auto")
     sp.add_argument("--ignore-baseline", action="store_true",
@@ -74,13 +75,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:
-        print(brand.logo(color=fmt.want_color("auto"),
-                         animate=brand.wants_animation(fmt.want_color("auto")),
-                         version=__version__))
+        depth = fmt.color_depth("auto")
+        print(brand.logo(color=depth, animate=brand.wants_animation(depth), version=__version__))
         parser.print_help()
         return 0
 
-    ink = fmt.Ink(fmt.want_color(args.color))
+    ink = fmt.Ink(fmt.color_depth(args.color), links=fmt.wants_links())
 
     if args.command == "explain":
         rule = RULES.get(args.rule.upper())
@@ -108,19 +108,40 @@ def main(argv: list[str] | None = None) -> int:
 # --------------------------------------------------------------------------
 
 
+# Nothing is drawn for the first fraction of a second. A scan that finishes in
+# three milliseconds should not flash a progress bar on its way past, and a
+# scan that takes ten seconds should not look like a hung terminal.
+QUIET_SECONDS = 0.15
+# Redraw cadence. Also the spinner's frame rate, since the two are the same
+# event: the bar only moves when there is new work to report.
+TICK_SECONDS = 0.06
+
+
 def _progress_for(args):
-    if args.format != "terminal" or not args.online or not sys.stderr.isatty():
+    if args.format != "terminal" or not sys.stderr.isatty():
         return None
-    ink = fmt.Ink(args.color != "never")
+    ink = fmt.Ink(fmt.color_depth(args.color, sys.stderr))
+    started = time.perf_counter()
+    state = {"last": 0.0, "step": 0}
 
     def report(label: str, done: int, total: int) -> None:
-        print("\r\033[K" + fmt.progress_line(label, done, total, ink), end="", file=sys.stderr, flush=True)
+        now = time.perf_counter()
+        if now - started < QUIET_SECONDS or now - state["last"] < TICK_SECONDS:
+            return
+        state["last"] = now
+        state["step"] += 1
+        report.drew = True
+        print("\r\033[K" + fmt.progress_line(label, done, total, ink, step=state["step"]),
+              end="", file=sys.stderr, flush=True)
 
+    report.drew = False
     return report
 
 
 def _clear(progress) -> None:
-    if progress:
+    """Only erase a line that was actually written, or a fast scan leaves a
+    stray escape on stderr for nothing."""
+    if getattr(progress, "drew", False):
         print("\r\033[K", end="", file=sys.stderr, flush=True)
 
 
@@ -175,6 +196,8 @@ def _scan(args, ink: fmt.Ink) -> int:
         print(fmt.as_json(report))
     elif args.format == "sarif":
         print(fmt.as_sarif(report))
+    elif args.format == "markdown":
+        print(fmt.as_markdown(report))
     else:
         if not report.manifests:
             print(f"\n  no npm or Python manifests under {args.path}\n", file=sys.stderr)
@@ -232,6 +255,8 @@ def _diff(args, ink: fmt.Ink) -> int:
         print(fmt.as_json_diff(report))
     elif args.format == "sarif":
         print(fmt.as_sarif(report))
+    elif args.format == "markdown":
+        print(fmt.as_markdown_diff(report))
     else:
         print(fmt.terminal_diff(report, ink))
 
@@ -253,6 +278,10 @@ on:
   push:
     branches: [main, master]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   supply-chain:
     runs-on: ubuntu-latest
@@ -263,13 +292,34 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install hemlock-scan
+      - run: pip install git+https://github.com/xzycd/hemlock
 
       # On a pull request, judge what the branch adds rather than the whole
       # tree. Everything already in the lockfile was somebody else's decision.
+      # The comment goes up either way, so a passing scan still leaves a record
+      # of what was checked.
       - name: scan the change
+        id: scan
         if: github.event_name == 'pull_request'
-        run: hemlock diff --since origin/${{ github.base_ref }} --online --fail-on high
+        continue-on-error: true
+        run: |
+          hemlock diff --since origin/${{ github.base_ref }} --online \\
+            --format markdown --fail-on high > hemlock.md
+
+      # A pull request from a fork gets a read-only token, so the comment
+      # cannot be posted. That is not a reason to fail the scan.
+      - name: comment on the pull request
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment ${{ github.event.number }} --body-file hemlock.md \\
+            --edit-last --create-if-none
+
+      - name: fail if the change introduced something
+        if: steps.scan.outcome == 'failure'
+        run: exit 1
 
       - name: scan everything
         if: github.event_name != 'pull_request'

@@ -149,15 +149,17 @@ def test_headline_agrees_with_its_count():
 
 
 def test_ascii_terminal_output_has_no_box_drawing(result, monkeypatch):
-    monkeypatch.setattr(fmt, "glyphs", lambda: fmt.ASCII)
+    """Asserted against the glyph table rather than a hand-written string, so
+    a new box-drawing character joins the check the moment it is added."""
+    monkeypatch.setattr("hemlock.ui.glyphs", lambda: fmt.ASCII)
     text = fmt.terminal(result, fmt.Ink(False))
-    assert not set(text) & set("─│├└●○▇░×→›·")
+    assert not set(text) & set("".join(fmt.UNICODE.values()))
     assert "colorz" in text and "HEM204" in text
 
 
 def test_summary_bar_never_exceeds_its_span(result):
     bar = fmt._summary(result, fmt.Ink(False), fmt.UNICODE, span=18)
-    blocks = sum(bar.count(c) for c in ("▇", "░"))
+    blocks = sum(bar.count(c) for c in (fmt.UNICODE["on"], fmt.UNICODE["off"]))
     assert blocks == 18
 
 

@@ -17,6 +17,8 @@ import os
 import sys
 import time
 
+from .ui import RAMP, RESET, code, width
+
 GLYPHS = {
     "h": ["█ █", "█ █", "███", "█ █", "█ █"],
     "e": ["███", "█  ", "██ ", "█  ", "███"],
@@ -27,10 +29,23 @@ GLYPHS = {
     "k": ["█  █", "█ █ ", "██  ", "█ █ ", "█  █"],
 }
 
-# Deep at the root, pale at the tip, like the stem the tool is named after.
-RAMP = ["\033[38;5;183m", "\033[38;5;177m", "\033[38;5;171m", "\033[38;5;135m", "\033[38;5;99m"]
-SWEEP = "\033[38;5;225m"
-RESET = "\033[0m"
+SWEEP = ("#ffffff", 225)
+TAIL = ("#7c7c8a", 243)
+
+# Socrates drank it and the eyes are crossed out, which is the whole joke.
+# It arrives after the wordmark has finished drawing rather than with it, so
+# there is a beat and then a face.
+FACE = [
+    "█ █   █ █",
+    " █     █ ",
+    "█ █   █ █",
+    "█       █",
+    " ███████ ",
+]
+FACE_GAP = 4
+# Below this the face would wrap and the mark would look broken instead of
+# absent, so it does not appear at all.
+FACE_MIN_WIDTH = 88
 
 TAGLINE = "poison hemlock looks like parsley"
 # Two columns a frame at 6ms lands the whole reveal near 200ms. Slower than
@@ -38,6 +53,9 @@ TAGLINE = "poison hemlock looks like parsley"
 # the program hanging.
 FRAME_SECONDS = 0.006
 COLUMNS_PER_FRAME = 2
+# Long enough to read as a separate beat, short enough that the whole mark
+# still lands inside a third of a second.
+FACE_BEAT = 0.07
 
 
 def render(word: str = "hemlock", scale: int = 2) -> list[str]:
@@ -53,20 +71,22 @@ def render(word: str = "hemlock", scale: int = 2) -> list[str]:
     return rows
 
 
-def paint(rows: list[str], columns: int | None = None, highlight: int | None = None) -> list[str]:
+def paint(rows: list[str], depth: int = 8, columns: int | None = None,
+          highlight: int | None = None) -> list[str]:
     """Colour the wordmark, optionally revealed only up to `columns`."""
     out = []
     for r, row in enumerate(rows):
+        tint, sweep = code(RAMP[r], depth), code(SWEEP, depth)
         visible = row if columns is None else row[:columns]
         if highlight is not None and 0 <= highlight < len(visible):
             head, tail = visible[:highlight], visible[highlight + 1:]
-            out.append(f"{RAMP[r]}{head}{SWEEP}{visible[highlight]}{RAMP[r]}{tail}{RESET}")
+            out.append(f"{tint}{head}{sweep}{visible[highlight]}{tint}{tail}{RESET}")
         else:
-            out.append(f"{RAMP[r]}{visible}{RESET}")
+            out.append(f"{tint}{visible}{RESET}")
     return out
 
 
-def wants_animation(color: bool, stream=None) -> bool:
+def wants_animation(color: bool | int, stream=None) -> bool:
     stream = stream or sys.stdout
     return bool(
         color
@@ -76,32 +96,56 @@ def wants_animation(color: bool, stream=None) -> bool:
     )
 
 
-def logo(color: bool = True, animate: bool = False, version: str = "", stream=None) -> str:
+def wants_face(columns: int | None = None) -> bool:
+    return (width() if columns is None else columns) >= FACE_MIN_WIDTH
+
+
+def mark(scale: int = 2, face: bool | None = None) -> list[str]:
+    """The wordmark, with the face beside it when there is room for it."""
+    rows = render(scale=scale)
+    if face is None:
+        face = wants_face()
+    if not face:
+        return rows
+    grin = ["".join(ch * scale for ch in row) for row in FACE]
+    return [f"{w}{' ' * FACE_GAP}{g}" for w, g in zip(rows, grin, strict=True)]
+
+
+def _arrival(rows: list[str], depth: int, at: int) -> list[str]:
+    """One frame with everything past `at` lit in the sweep colour, so the
+    face lands instead of fading in."""
+    return [f"{code(RAMP[r], depth)}{row[:at]}{code(SWEEP, depth)}{row[at:]}{RESET}"
+            for r, row in enumerate(rows)]
+
+
+def logo(color: bool | int = True, animate: bool = False, version: str = "", stream=None) -> str:
     """The full mark. Animates in place when asked, then returns the final frame."""
+    depth = (8 if color else 0) if isinstance(color, bool) else int(color)
     stream = stream or sys.stdout
-    rows = render()
-    width = max(len(r) for r in rows)
+    word = render()
+    span = max(len(r) for r in word)
+    rows = mark()
 
     if animate:
         stream.write("\n")
-        for step in range(0, width + COLUMNS_PER_FRAME, COLUMNS_PER_FRAME):
+        for step in range(0, span + COLUMNS_PER_FRAME, COLUMNS_PER_FRAME):
             if step:
-                stream.write(f"\033[{len(rows)}A")
-            frame = paint(rows, columns=step, highlight=step - 1)
+                stream.write(f"\033[{len(word)}A")
+            frame = paint(word, depth, columns=step, highlight=step - 1)
             stream.write("".join(f"\r\033[K  {line}\n" for line in frame))
             stream.flush()
             time.sleep(FRAME_SECONDS)
-        stream.write(f"\033[{len(rows)}A")
+        if rows is not word and len(rows[0]) > span:
+            stream.write(f"\033[{len(word)}A")
+            stream.write("".join(f"\r\033[K  {line}\n" for line in _arrival(rows, depth, span)))
+            stream.flush()
+            time.sleep(FACE_BEAT)
+        stream.write(f"\033[{len(word)}A")
 
-    body = paint(rows) if color else rows
+    body = paint(rows, depth) if depth else rows
     lines = ["", *[f"  {line}" for line in body]]
 
     tail = TAGLINE if not version else f"{TAGLINE}   v{version}"
-    lines.append(f"  \033[38;5;243m{tail}\033[0m" if color else f"  {tail}")
+    lines.append(f"  {code(TAIL, depth)}{tail}{RESET}" if depth else f"  {tail}")
     lines.append("")
     return "\n".join(lines)
-
-
-def sigil(color: bool = True) -> str:
-    """The one-line mark used in headers, where five rows would be rude."""
-    return "\033[38;5;141m\033[1mhemlock\033[0m" if color else "hemlock"
