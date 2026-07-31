@@ -244,3 +244,24 @@ def test_declared_repo_is_normalised_for_comparison():
     )
     http = FakeHttp({"https://registry.npmjs.org/widget": packument})
     assert Registry(http)._npm("widget", "1.0.0")["declared_repo"] == "acme/widget"
+
+
+# -- check, wired to the same enrichment as scan ---------------------------
+
+
+def test_check_asks_osv_about_a_package_named_on_the_command_line(monkeypatch):
+    """The reason `check` exists: the answer to "should I install this" is
+    mostly a question for osv.dev, and it costs one request."""
+    from hemlock import http as http_mod
+    from hemlock import scan
+    from hemlock.policy import Policy
+
+    docs = {
+        BATCH: lambda payload: {"results": [{"vulns": [{"id": "MAL-2025-46969"}]}]},
+        VULN + "MAL-2025-46969": {"summary": "Malicious code in chalk (npm)"},
+    }
+    monkeypatch.setattr(http_mod, "Http", lambda *a, **k: FakeHttp(docs))
+
+    report = scan.check([scan.parse_spec("npm:chalk@5.6.1")], Policy(), online=True)
+    assert [v.package.coord for v in report.malware] == ["chalk@5.6.1"]
+    assert report.worst() == "critical"

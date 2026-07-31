@@ -473,6 +473,28 @@ def test_the_release_workflow_asks_for_attestations():
     assert "id-token: write" in text
 
 
+def test_ci_steps_that_capture_a_report_do_not_gate_on_it():
+    """`hemlock scan fixture --format sarif > file` failed the build for three
+    weeks. The fixture is known-bad, so scanning it exits 1 by design, and a
+    step that only wants the file was reading that as its own failure.
+
+    Scoped to our own ci.yml. The workflow `hemlock init` generates redirects
+    without `--fail-on never` on purpose: that step is `continue-on-error` and
+    its outcome is what gates the build.
+    """
+    path = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows", "ci.yml")
+    for line in open(path):
+        if ">" in line and ("hemlock scan" in line or "hemlock diff" in line):
+            assert "--fail-on never" in line, f"captures a report but gates on it: {line.strip()}"
+
+
+def test_ci_runs_on_pushes_to_the_default_branch():
+    """The trigger said `main` while the repository's default branch is
+    `master`, so no push to it ever ran the suite."""
+    path = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows", "ci.yml")
+    assert "branches: [main, master]" in open(path).read()
+
+
 def test_the_generated_workflow_installs_from_somewhere_that_exists(tmp_path):
     """`pip install hemlock-scan` shipped in this file for three releases and
     fails, because nothing of that name is on PyPI. Anyone running

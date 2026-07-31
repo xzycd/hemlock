@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.4.1
+
+### Added
+
+- **`hemlock check`.** Judge a package by name, with no project around it:
+  `hemlock check chalk@5.6.1 --online`. A scan tells you about a decision you
+  already made; this answers the question you have a minute earlier, when a
+  README has just told you to install something. Offline it is a name check
+  and says so on its second line, because there is no source or lockfile
+  behind a name typed into a shell. Online it reaches osv.dev, build
+  provenance and publisher history, which is where it earns its keep.
+
+- **Status words during a scan.** The line reads `Grazing…`, then something
+  else five to ten seconds later. The bar underneath is still real progress
+  through a real list; the word and the spinner are time passing and say
+  nothing about how far along anything is.
+
+- **The wordmark at the top of an interactive scan**, not only on bare
+  `hemlock`. Off under CI, off without a terminal, off when stdout is
+  redirected, off with `--no-logo` or `HEMLOCK_NO_LOGO`.
+
+### Changed
+
+- **The palette was a rainbow.** Magenta, orange, yellow, teal and green on
+  one screen cannot be ranked at a glance, so the reader falls back on the
+  numbers, which is what the colour was there to save them. Severity is now
+  one warm ramp that heats up, purple is the brand and never means a severity,
+  and low sits close to grey because a wall of low findings is background.
+
+- **The live display moved onto its own thread.** It used to redraw from
+  inside the work loop, so a scan blocked on a slow registry sat with a frozen
+  spinner, which reads as a hung process.
+
+### Fixed
+
+- **CI had never passed.** The step that writes SARIF scanned the known-bad
+  fixture without `--fail-on never`, so hemlock exited 1 by design and the
+  step read that as its own failure. The weekly live-registry job had the same
+  bug and its assertion was unreachable behind it. A test now fails if any
+  step in `ci.yml` captures a report and gates on it.
+
+- **CI ran on pushes to `main`.** The default branch is `master`, so no push
+  to it ever ran the suite.
+
+- **Evidence carried a typographic ellipsis.** Clipped evidence goes into
+  JSON, SARIF and CI logs as well as onto a terminal, so the marker is three
+  dots now. It was also the one non-ASCII character the ASCII fallback leaked.
+
 ## 0.4.0
 
 The theme is the view. Every rule and every score from 0.3 is unchanged; what
