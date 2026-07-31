@@ -7,6 +7,7 @@ of the page.
 """
 
 import os
+import re
 import shutil
 
 import pytest
@@ -315,13 +316,23 @@ def test_a_small_group_is_left_alone():
     assert text.count("Version is not pinned") == small
 
 
-def test_nothing_at_the_failing_threshold_is_ever_collapsed():
-    """Whatever broke the build gets its own block, however many there are."""
-    packages = crowd("HEM101", 7)  # HEM101 scores 30, which is medium
-    folded = fmt.terminal(packages, ui.Ink(False), fail_on="high")
-    expanded = fmt.terminal(packages, ui.Ink(False), fail_on="medium")
-    assert folded.count("near-miss") == 1
-    assert expanded.count("near-miss") == 7
+def test_a_group_that_broke_the_build_names_every_package_it_holds():
+    """Sixteen byte-identical high blocks is one finding and fifteen scrolls,
+    so groups above the threshold fold too. What they do not do is truncate:
+    the cap that keeps a two thousand name list readable is exactly the thing
+    that must not apply to whatever failed the build."""
+    total = fmt.CROWD_NAMES + 9
+    text = fmt.terminal(crowd("HEM101", total), ui.Ink(False), fail_on="medium")
+    assert text.count("near-miss") == 1, "should still collapse"
+    listed = {m.group(0) for m in re.finditer(r"pkg\d+", text)}
+    assert listed == {f"pkg{i}" for i in range(total)}
+    assert "more" not in text.split("near-miss")[1].split("fix")[0]
+
+
+def test_a_group_below_the_threshold_caps_its_name_list_and_says_so():
+    packages = crowd("HEM101", fmt.CROWD_NAMES + 9)
+    text = fmt.terminal(packages, ui.Ink(False), fail_on="high")
+    assert f"and {9:,} more" in text
 
 
 def test_critical_is_never_collapsed():

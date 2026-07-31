@@ -17,7 +17,8 @@ import os
 import sys
 import time
 
-from .ui import RAMP, RESET, code, width
+from .ui import RAMP, RESET, code
+from .ui import columns as terminal_columns
 
 GLYPHS = {
     "h": ["█ █", "█ █", "███", "█ █", "█ █"],
@@ -43,9 +44,18 @@ FACE = [
     " ███████ ",
 ]
 FACE_GAP = 4
-# Below this the face would wrap and the mark would look broken instead of
-# absent, so it does not appear at all.
+
+# The mark steps down rather than wrapping. Block letters that run past the
+# edge do not degrade, they shred: the second half of every row lands under
+# the first and the whole thing reads as noise. These are the widths each
+# size actually needs, measured from the glyph table rather than guessed.
+#
+#   scale 2 = 60 columns of letters, + 4 gap + 18 of face  = 84, + 2 indent
+#   scale 2 alone                                          = 60, + 2 indent
+#   scale 1 alone                                          = 30, + 2 indent
 FACE_MIN_WIDTH = 88
+WORDMARK_MIN_WIDTH = 64
+SMALL_MIN_WIDTH = 34
 
 TAGLINE = "poison hemlock looks like parsley"
 # Two columns a frame at 6ms lands the whole reveal near 200ms. Slower than
@@ -96,8 +106,25 @@ def wants_animation(color: bool | int, stream=None) -> bool:
     )
 
 
+def fit(columns: int | None = None) -> tuple[int, bool]:
+    """How big the mark can be drawn here: (scale, face).
+
+    A scale of 0 means there is no room for block letters at all, and the
+    caller should fall back to a plain line. Four sizes beats one size that
+    wraps: a terminal at thirty columns is a real place people work.
+    """
+    room = terminal_columns() if columns is None else columns
+    if room >= FACE_MIN_WIDTH:
+        return 2, True
+    if room >= WORDMARK_MIN_WIDTH:
+        return 2, False
+    if room >= SMALL_MIN_WIDTH:
+        return 1, False
+    return 0, False
+
+
 def wants_face(columns: int | None = None) -> bool:
-    return (width() if columns is None else columns) >= FACE_MIN_WIDTH
+    return fit(columns)[1]
 
 
 def mark(scale: int = 2, face: bool | None = None) -> list[str]:
@@ -118,13 +145,27 @@ def _arrival(rows: list[str], depth: int, at: int) -> list[str]:
             for r, row in enumerate(rows)]
 
 
-def logo(color: bool | int = True, animate: bool = False, version: str = "", stream=None) -> str:
+def logo(color: bool | int = True, animate: bool = False, version: str = "",
+         stream=None, columns: int | None = None) -> str:
     """The full mark. Animates in place when asked, then returns the final frame."""
     depth = (8 if color else 0) if isinstance(color, bool) else int(color)
     stream = stream or sys.stdout
-    word = render()
+    room = terminal_columns() if columns is None else columns
+    scale, face = fit(room)
+
+    if not scale:
+        # Narrower than the smallest letters. A wrapped wordmark is worse
+        # than none, and the name still has to appear somewhere. The version
+        # goes too if even that does not fit; below about nine columns there
+        # is nothing left to give up.
+        name = f"hemlock v{version}" if version else "hemlock"
+        if len(name) + 2 > room:
+            name = "hemlock"
+        return f"\n  {code(RAMP[2], depth)}{name}{RESET}\n" if depth else f"\n  {name}\n"
+
+    word = render(scale=scale)
     span = max(len(r) for r in word)
-    rows = mark()
+    rows = mark(scale=scale, face=face)
 
     if animate:
         stream.write("\n")
@@ -145,7 +186,12 @@ def logo(color: bool | int = True, animate: bool = False, version: str = "", str
     body = paint(rows, depth) if depth else rows
     lines = ["", *[f"  {line}" for line in body]]
 
+    # The tagline is the first thing to go. It is the one part of the mark
+    # that says nothing you cannot read in the help text underneath it.
     tail = TAGLINE if not version else f"{TAGLINE}   v{version}"
-    lines.append(f"  {code(TAIL, depth)}{tail}{RESET}" if depth else f"  {tail}")
+    if len(tail) + 2 > room:
+        tail = f"v{version}" if version else ""
+    if tail:
+        lines.append(f"  {code(TAIL, depth)}{tail}{RESET}" if depth else f"  {tail}")
     lines.append("")
     return "\n".join(lines)

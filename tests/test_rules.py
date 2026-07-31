@@ -1,7 +1,18 @@
 import pytest
 
+from hemlock import rules as rules_mod
+from hemlock.data import POPULAR
 from hemlock.model import Context, Package
-from hemlock.rules import affix_impersonation, edit_distance, entropy, homoglyph_name, near_miss, scope_drop
+from hemlock.rules import (
+    affix_impersonation,
+    edit_distance,
+    entropy,
+    homoglyph_name,
+    near_miss,
+    nearest,
+    scope_drop,
+    wearing_affix,
+)
 
 CTX = Context(root=".")
 
@@ -98,3 +109,75 @@ def test_entropy_separates_text_from_random():
     assert entropy("aaaaaaaaaaaa") < 1.0
     assert entropy("the quick brown fox") < 4.5
     assert entropy("aB3xQ9zL7pW2mK5vN8rT4yU6iO1sD0fG") > 4.5
+
+
+# -- the naming prefilters -------------------------------------------------
+#
+# Comparing every package name against the whole corpus was 93% of the runtime
+# on a fifty thousand package lockfile. Two prefilters cut that, and both have
+# to be sound rather than merely fast, so they are pinned against the sweep
+# they replaced.
+
+
+def _brute_force_nearest(name, ecosystem):
+    """What the rule did before: score the whole corpus, keep the best."""
+    hits = []
+    for target in POPULAR.get(ecosystem, frozenset()):
+        d = edit_distance(name, target, cutoff=2)
+        if d and d <= 2 and abs(len(name) - len(target)) <= 2:
+            hits.append((d, target))
+    return min(hits) if hits else None
+
+
+def _mutations(word):
+    """The four ways a name gets typoed, which is what the rule is for."""
+    for i in range(len(word)):
+        yield word[:i] + word[i + 1:]                      # deletion
+        yield word[:i] + "x" + word[i + 1:]                # substitution
+        yield word[:i] + "q" + word[i:]                    # insertion
+        if i + 1 < len(word):
+            yield word[:i] + word[i + 1] + word[i] + word[i + 2:]   # transposition
+
+
+@pytest.mark.parametrize("ecosystem", ["npm", "pypi"])
+def test_the_prefilters_never_change_a_verdict(ecosystem):
+    for target in sorted(POPULAR[ecosystem]):
+        for name in _mutations(target):
+            assert nearest(name, ecosystem) == _brute_force_nearest(name, ecosystem), name
+
+
+def test_an_unrelated_name_is_rejected_without_the_dynamic_programming():
+    """The length and character prefilters are what make a monorepo scan
+    finish. A name sharing nothing with the corpus should not reach the DP."""
+    calls = []
+    real = rules_mod.edit_distance
+
+    def counted(a, b, cutoff=3):
+        calls.append((a, b))
+        return real(a, b, cutoff)
+
+    rules_mod.edit_distance = counted
+    try:
+        rules_mod.nearest.cache_clear()
+        rules_mod.nearest("zzqqwwxxjjkk", "npm")
+    finally:
+        rules_mod.edit_distance = real
+        rules_mod.nearest.cache_clear()
+    assert calls == [], f"reached the DP {len(calls)} times for a name sharing nothing"
+
+
+def test_the_nearest_match_is_the_closest_one_and_is_stable():
+    """The old sweep returned whichever match set iteration reached first, so
+    two runs could name different neighbours for the same package."""
+    assert nearest("requsts", "pypi") == (1, "requests")
+    assert nearest("colorz", "npm") == (1, "colors")
+    assert nearest("requsts", "pypi") == nearest("requsts", "pypi")
+
+
+def test_affix_stripping_survived_being_precompiled():
+    """`python3-dateutil` is not in here on purpose: it is one edit from
+    `python-dateutil`, so HEM101 catches it and HEM102 never sees it."""
+    assert wearing_affix("colors-js", "npm") == ("colors", "js")
+    assert wearing_affix("requests-python", "pypi") == ("requests", "python")
+    assert wearing_affix("urllib3-sdk", "pypi") == ("urllib3", "sdk")
+    assert wearing_affix("wholly-unrelated-name", "npm") is None

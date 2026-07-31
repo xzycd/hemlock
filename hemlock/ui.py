@@ -118,8 +118,16 @@ def glyphs() -> dict[str, str]:
     return UNICODE if "utf" in encoding else ASCII
 
 
+def columns() -> int:
+    """What the terminal actually is. `width()` clamps this, because a report
+    laid out in forty columns is unreadable whatever you do to it, so it takes
+    the overflow instead. Anything drawn as a picture needs the real number:
+    the wordmark cannot take the overflow, it just wraps into confetti."""
+    return shutil.get_terminal_size((100, 24)).columns
+
+
 def width() -> int:
-    return max(60, min(shutil.get_terminal_size((100, 24)).columns, 110))
+    return max(60, min(columns(), 110))
 
 
 # -- ink -------------------------------------------------------------------

@@ -404,3 +404,62 @@ def test_rule_evaluation_reports_progress(project):
 def test_duration_reads_in_the_right_unit():
     assert fmt.duration(0.005) == "5ms"
     assert fmt.duration(2.5) == "2.5s"
+
+
+# -- the mark at every width -----------------------------------------------
+
+
+@pytest.mark.parametrize("room", [200, 120, 88, 87, 70, 64, 63, 50, 40, 34, 33, 20, 12])
+def test_the_mark_never_runs_past_the_edge(room):
+    """Block letters do not degrade when they overflow, they shred: the back
+    half of every row lands under the front half and the mark reads as noise.
+    Reported from a phone-width terminal.
+
+    Twelve is the floor worth testing. "  hemlock" is nine columns and there
+    is nothing below that to give up."""
+    text = brand.logo(color=0, version="0.5.0", columns=room)
+    for line in text.splitlines():
+        assert ui.visible(line) <= room, f"{ui.visible(line)} > {room}: {line!r}"
+
+
+def test_the_mark_steps_down_instead_of_wrapping():
+    assert brand.fit(120) == (2, True)
+    assert brand.fit(70) == (2, False)
+    assert brand.fit(40) == (1, False)
+    assert brand.fit(20) == (0, False)
+
+
+def test_a_terminal_too_narrow_for_letters_still_says_the_name():
+    text = brand.logo(color=0, version="0.5.0", columns=20)
+    assert "hemlock" in text and "0.5.0" in text
+
+
+def test_the_report_width_floor_does_not_reach_the_wordmark(monkeypatch):
+    """`width()` clamps to 60 so report columns cannot collapse. The mark has
+    to see the real number or it never learns the terminal is narrow, which
+    is exactly how it ended up wrapping."""
+    monkeypatch.setattr("shutil.get_terminal_size", lambda *a: os.terminal_size((40, 24)))
+    assert ui.width() == 60      # the report takes the overflow
+    assert ui.columns() == 40    # the mark sees the truth and shrinks
+    assert brand.fit() == (1, False)
+
+
+def test_the_readme_banner_matches_the_current_brand():
+    """The banner is generated rather than screenshotted precisely so it
+    cannot drift from the palette. Change RAMP, the glyph table or the
+    version and re-run `python3 tools/banner.py`."""
+    import importlib.util
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec = importlib.util.spec_from_file_location(
+        "banner", os.path.join(root, "tools", "banner.py"))
+    banner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(banner)
+
+    on_disk = open(os.path.join(root, "docs", "banner.svg"), encoding="utf-8").read()
+    assert banner.svg() == on_disk, "stale banner: run `python3 tools/banner.py`"
+
+
+def test_the_readme_shows_the_banner():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    assert "docs/banner.svg" in open(os.path.join(root, "README.md"), encoding="utf-8").read()
