@@ -112,8 +112,11 @@ with no API token involved, and carries a PEP 740 attestation naming the
 workflow that built it. Point hemlock at itself and it will tell you so:
 
 ```bash
-hemlock check hemlock-scan --online
+hemlock check pypi:hemlock-scan --online
 ```
+
+A bare name is read as npm unless you prefix it, which is why that one says
+`pypi:`.
 
 ## Use
 
