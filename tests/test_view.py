@@ -287,6 +287,97 @@ def test_a_route_is_drawn_as_a_staircase(nested, capsys):
     assert indents[0] < indents[-1]
 
 
+# -- crowds ----------------------------------------------------------------
+
+
+def crowd(rule_id, n, prefix="pkg"):
+    return report_with(*[verdict(rule_id, name=f"{prefix}{i}") for i in range(n)])
+
+
+def test_one_rule_flagging_a_crowd_collapses_into_one_block():
+    """Forty unpinned versions is one observation about a project, not forty.
+    Printing it forty times is how the finding that failed the build ends up
+    in the middle of a scroll."""
+    text = fmt.terminal(crowd("HEM401", 20), ui.Ink(False), fail_on="high")
+    assert text.count("Version is not pinned") == 1
+    assert "20 packages" in text
+
+
+def test_a_collapsed_group_still_names_every_package():
+    text = fmt.terminal(crowd("HEM401", 20), ui.Ink(False), fail_on="high")
+    for i in range(20):
+        assert f"pkg{i}" in text
+
+
+def test_a_small_group_is_left_alone():
+    small = fmt.CROWD_MIN - 1
+    text = fmt.terminal(crowd("HEM401", small), ui.Ink(False), fail_on="high")
+    assert text.count("Version is not pinned") == small
+
+
+def test_nothing_at_the_failing_threshold_is_ever_collapsed():
+    """Whatever broke the build gets its own block, however many there are."""
+    packages = crowd("HEM101", 7)  # HEM101 scores 30, which is medium
+    folded = fmt.terminal(packages, ui.Ink(False), fail_on="high")
+    expanded = fmt.terminal(packages, ui.Ink(False), fail_on="medium")
+    assert folded.count("near-miss") == 1
+    assert expanded.count("near-miss") == 7
+
+
+def test_critical_is_never_collapsed():
+    """A worm hits every package in a lockfile at once, and every one of them
+    is a single HEM701. That is the case this guard exists for."""
+    packages = crowd("HEM701", 8)
+    text = fmt.terminal(packages, ui.Ink(False), fail_on="critical")
+    assert text.count("reported as malware") == 8
+
+
+def test_a_package_with_more_than_one_finding_keeps_its_own_block():
+    pkg = Package("npm", "colorz", version="1.0.4", origin="package-lock.json")
+    pair = score_package(pkg, [Finding(RULES["HEM401"], pkg, ["e"]),
+                               Finding(RULES["HEM402"], pkg, ["e"])])
+    text = fmt.terminal(report_with(pair, *crowd("HEM401", 6).verdicts),
+                        ui.Ink(False), fail_on="high")
+    assert "colorz" in text and "HEM402" in text
+
+
+# -- the exit line ---------------------------------------------------------
+
+
+def test_the_exit_line_names_what_failed_the_build():
+    text = fmt.terminal(report_with(verdict("HEM701", name="chalk")), ui.Ink(False), fail_on="high")
+    assert "exit 1" in text and "chalk" in text and "at high or above" in text
+
+
+def test_the_exit_line_is_not_drowned_by_findings_that_did_not_cause_it():
+    """The whole point: one critical finding among thirty low ones stays
+    findable, and the thirty do not each get five lines."""
+    quiet = crowd("HEM401", 30).verdicts
+    text = fmt.terminal(report_with(verdict("HEM701", name="chalk"), *quiet),
+                        ui.Ink(False), fail_on="high")
+    assert "exit 1" in text and "chalk" in text
+    assert text.count("Version is not pinned") == 1
+
+
+def test_no_exit_line_when_nothing_reaches_the_threshold():
+    text = fmt.terminal(crowd("HEM401", 6), ui.Ink(False), fail_on="high")
+    assert "exit 1" not in text
+
+
+def test_no_exit_line_when_failing_is_switched_off():
+    text = fmt.terminal(report_with(verdict("HEM701")), ui.Ink(False), fail_on="never")
+    assert "exit 1" not in text
+
+
+def test_the_exit_line_agrees_with_the_actual_exit_code(project, capsys):
+    from hemlock import cli as cli_mod
+
+    code = cli_mod.main(["scan", project, "--color", "never", "--fail-on", "high"])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert ("exit 1" in out) == (code == 1)
+
+
 # -- markdown --------------------------------------------------------------
 
 

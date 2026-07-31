@@ -202,7 +202,7 @@ def _scan(args, ink: fmt.Ink) -> int:
         if not report.manifests:
             print(f"\n  no npm or Python manifests under {args.path}\n", file=sys.stderr)
             return 0
-        print(fmt.terminal(report, ink, show_all=args.all))
+        print(fmt.terminal(report, ink, show_all=args.all, fail_on=fail_on))
 
     return _exit_code(report, fail_on)
 

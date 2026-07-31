@@ -442,6 +442,17 @@ Exit codes: `0` when nothing reaches the threshold, `1` when something does,
 `2` when the scan could not run. Set the threshold with
 `--fail-on low|medium|high|critical|never`.
 
+When a scan exits `1` it says so at the bottom, and names the packages
+responsible:
+
+```
+  ██████████████████  24 scanned · 2 medium · 22 low
+  exit 1  2 packages at medium or above: python3-dateutil, requsts
+```
+
+A build that fails without telling you which line failed it is a build people
+learn to rerun.
+
 To leave the result on the pull request instead of only in the job log, write
 the Markdown report and hand it to `gh`. The comment carries a hidden marker,
 so `--edit-last` finds the previous one and replaces it:
@@ -511,6 +522,23 @@ of a second: the letters sweep in left to right, then the face lands. It is off
 under CI, off without a terminal, off without colour, and off when
 `HEMLOCK_NO_ANIMATION` is set. Anything that delays a pipe or corrupts a
 redirect has stopped being decoration and started being a bug.
+
+One rule flagging thirty packages is one observation about a project, not
+thirty, so it prints once with all thirty names rather than thirty times with
+five lines each:
+
+```
+  ▌ █░░░░░░░░░   12  HEM401  Version is not pinned                          22 packages
+  ▌   pkg0, pkg1, pkg10, pkg11, pkg12, pkg13, pkg14, pkg15, pkg16, pkg17, pkg18,
+  ▌   pkg19, pkg2, pkg20, pkg21, pkg3, pkg4, pkg5, pkg6, pkg7, pkg8, pkg9
+  ▌   fix  Pin the version and commit a lockfile.
+```
+
+Nothing is folded away that you are meant to act on. Critical and high never
+group, and neither does anything at or above the threshold you set with
+`--fail-on`, so whatever failed the build always gets its own block. That is
+the whole reason for grouping: the one finding that matters should not be
+somewhere in the middle of a scroll.
 
 A scan shows a spinner whose colour walks up the purple ramp and back, over a
 bar whose leading cell is lit separately from its body, because a block that
