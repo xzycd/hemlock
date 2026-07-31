@@ -117,6 +117,7 @@ becomes `pipx install hemlock-scan`.
 hemlock init                      # write a config file and a CI workflow
 hemlock scan .                    # offline, fast, no network at all
 hemlock scan . --online           # add registry, provenance and OSV checks
+hemlock check chalk@5.6.1         # judge a package before you install it
 hemlock diff --since origin/main  # score only what a branch adds
 hemlock why left-pad              # who asked for this package
 hemlock baseline .                # accept today's findings, fail only on new ones
@@ -132,6 +133,48 @@ It finds its own work. Point it at a directory and it walks for
 `poetry.lock`, `Pipfile.lock` and `pyproject.toml`. If `node_modules` or a
 virtualenv is present it reads the installed source too, which is the only
 place real install scripts live.
+
+### Before you install it
+
+A scan tells you about a decision you already made. `hemlock check` answers
+the question you have a minute earlier, when a README or a colleague has just
+told you to install something.
+
+```bash
+hemlock check chalk@5.6.1 --online
+hemlock check pypi:requests==2.32.3 --online
+hemlock check @types/node@20.1.0 lodash@4.17.21
+```
+
+An unprefixed name is treated as npm. Put `pypi:` in front of it, or pass
+`--ecosystem pypi`, for the other one. Packages you named are always listed,
+clean ones included, because "nothing flagged" is not an answer to a question
+about three specific packages.
+
+Offline this is a name check and nothing more, and the report says so on its
+second line. There is no package.json, no source tree and no lockfile entry
+behind a name typed into a shell, so the install-time, code-shape and pinning
+rules have nothing to read. `--online` is where it earns its keep: osv.dev,
+build provenance and the publisher history all key off the name and version
+alone.
+
+```
+  hemlock  chalk@5.6.1 ──────────────────────  1 package · online · 1.4s
+
+  ╭─ MALWARE ────────────────────────────────────────────────────────────╮
+  │  chalk@5.6.1 is on a public malware list. Remove it, then rotate     │
+  │  every credential the install could reach.                          │
+  ╰──────────────────────────────────────────────────────────────────────╯
+
+  ▌ ██████████ MAL   npm   chalk 5.6.1                          malware
+  ▌ ├ HEM701  This exact version is reported as malware
+  ▌ │         MAL-2025-46969 (GHSA-2v46-p5h4-248w): Malicious code in chalk (npm)
+  ▌ └ HEM601  Published without build provenance
+```
+
+The exit code follows the same `--fail-on` threshold as everything else,
+which defaults to high. A typosquat scores medium, so gate a pre-install
+check with `--fail-on medium` if you want it to stop you.
 
 ### Reviewing a change, not a codebase
 
@@ -517,11 +560,21 @@ None of that is allowed to move a column. Every row is placed by measuring
 visible width with the escapes stripped, and a test renders the same scan with
 links on and off and asserts the two come out the same shape.
 
-The wordmark animates once, on `hemlock` with no arguments, in about a quarter
-of a second: the letters sweep in left to right, then the face lands. It is off
-under CI, off without a terminal, off without colour, and off when
-`HEMLOCK_NO_ANIMATION` is set. Anything that delays a pipe or corrupts a
-redirect has stopped being decoration and started being a bug.
+Severity is one warm ramp rather than a spread of hues: grey for low, straw
+for medium, ember for high, red for critical. An earlier version put magenta,
+orange, yellow, teal and green on the same screen, and five hues cannot be
+ranked at a glance, so you ended up reading the numbers, which is what the
+colour was there to save you from. Purple is the brand and never means a
+severity, so anything purple is the tool talking about itself. Low sits close
+to grey on purpose: a wall of low findings is background, and the one high
+finding behind it is what you opened the report for.
+
+The wordmark animates in about a quarter of a second, on `hemlock` with no
+arguments and at the top of an interactive scan: the letters sweep in left to
+right, then the face lands. It is off under CI, off without a terminal, off
+without colour, off when stdout is redirected, and off with `--no-logo` or
+`HEMLOCK_NO_LOGO`. Anything that delays a pipe or corrupts a redirect has
+stopped being decoration and started being a bug.
 
 One rule flagging thirty packages is one observation about a project, not
 thirty, so it prints once with all thirty names rather than thirty times with
@@ -540,12 +593,28 @@ group, and neither does anything at or above the threshold you set with
 the whole reason for grouping: the one finding that matters should not be
 somewhere in the middle of a scroll.
 
-A scan shows a spinner whose colour walks up the purple ramp and back, over a
-bar whose leading cell is lit separately from its body, because a block that
-holds still reads as a stalled job. It is driven by real progress through the
-package list, and nothing is drawn for the first 150ms, so a scan that finishes
-in three milliseconds goes past in silence and only a project big enough to
-make you wait ever animates.
+A running scan draws a line that keeps moving:
+
+```
+  ⠴ Grazing…            ██████████░░░░  2038/3000  ·  applying rules  ·  592ms
+```
+
+The spinner's colour walks up the purple ramp and back, the word changes every
+five to ten seconds, and the bar's leading cell is lit separately from its body
+because a block that holds still reads as a stalled job.
+
+What moves stays honest about what it means. The bar is real progress through a
+real list and never advances on its own. The spinner and the word are time
+passing and claim nothing about how far along anything is, which is the point:
+they are there so a scan waiting twelve seconds on osv.dev does not look like a
+scan that has died. That is also why the display runs on its own thread rather
+than being redrawn from inside the work loop, where a single slow package used
+to freeze it.
+
+Nothing is drawn for the first 150ms, so a scan that finishes in three
+milliseconds goes past in silence and only a project big enough to make you
+wait ever animates. It writes to stderr, never to stdout, so `--format json`
+stays parseable and a redirect stays clean.
 
 ## Zero dependencies, on purpose
 
@@ -608,6 +677,7 @@ hemlock/
   policy.py      .hemlock.toml
   report.py      what goes on the page: terminal, Markdown, JSON, SARIF
   ui.py          how it looks: colour depth, gauges, rails, panels, links
+  motion.py      the live line during a scan, on its own thread
   data.py        typosquat corpus, homoglyphs, credential paths
 ```
 

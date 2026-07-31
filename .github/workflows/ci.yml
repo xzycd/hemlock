@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
   schedule:
     # The online rules talk to live registries. A weekly run catches it when
@@ -56,8 +56,19 @@ jobs:
             echo "::error::hemlock diff did not flag the added typosquat"
             exit 1
           } || echo "typosquat flagged as expected"
+      - name: check judges a bare name
+        run: |
+          hemlock check colorz --fail-on medium && {
+            echo "::error::hemlock check did not flag a typosquat"
+            exit 1
+          } || echo "typosquat flagged as expected"
+          hemlock check lodash --fail-on low
+
+      # --fail-on never, because this step wants the file, not the verdict.
+      # The fixture is known-bad, so a scan of it exits 1 by design, and the
+      # step above is the one that asserts that.
       - name: emit SARIF
-        run: hemlock scan examples/compromised-app --format sarif > hemlock.sarif
+        run: hemlock scan examples/compromised-app --format sarif --fail-on never > hemlock.sarif
       - name: the pull request comment still renders
         run: |
           hemlock scan examples/compromised-app --format markdown --fail-on never > hemlock.md
@@ -98,7 +109,7 @@ jobs:
             "":{"dependencies":{"chalk":"5.6.1"}},
             "node_modules/chalk":{"version":"5.6.1","integrity":"sha512-x"}}}
           JSON
-          hemlock scan /tmp/mal --online --format json > /tmp/mal/out.json
+          hemlock scan /tmp/mal --online --format json --fail-on never > /tmp/mal/out.json
           python -c "
           import json,sys
           d=json.load(open('/tmp/mal/out.json'))

@@ -287,3 +287,75 @@ def test_a_certain_finding_settles_the_verdict_alone():
 def test_certain_findings_sort_first():
     pkg, mixed = make_findings("HEM401", "HEM701")
     assert score_package(pkg, mixed).findings[0].rule.id == "HEM701"
+
+
+# -- hemlock check ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("text, ecosystem, name, version", [
+    ("chalk@5.6.1", "npm", "chalk", "5.6.1"),
+    ("chalk", "npm", "chalk", None),
+    ("@types/node@20.1.0", "npm", "@types/node", "20.1.0"),
+    ("@types/node", "npm", "@types/node", None),
+    ("pypi:requests==2.32.3", "pypi", "requests", "2.32.3"),
+    ("pypi:django@5.0", "pypi", "django", "5.0"),
+    ("npm:lodash", "npm", "lodash", None),
+])
+def test_a_package_spec_parses(text, ecosystem, name, version):
+    """The scoped-name case is the one that bites: `@types/node` opens with
+    the same character that separates a version, so only a later one counts."""
+    pkg = scan.parse_spec(text)
+    assert (pkg.ecosystem, pkg.name, pkg.version) == (ecosystem, name, version)
+
+
+def test_an_unprefixed_name_follows_the_ecosystem_flag():
+    assert scan.parse_spec("requests", default="pypi").ecosystem == "pypi"
+    assert scan.parse_spec("npm:chalk", default="pypi").ecosystem == "npm"
+
+
+def test_check_judges_a_name_with_no_project_around_it():
+    report = scan.check([scan.parse_spec("colorz")], Policy())
+    assert [f.rule.id for v in report.flagged for f in v.findings] == ["HEM101"]
+
+
+def test_check_says_what_it_could_not_look_at():
+    """Offline, a bare name only reaches the naming rules. A report that does
+    not say so is claiming more than it found."""
+    report = scan.check([scan.parse_spec("colorz")], Policy())
+    assert "no install scripts" in report.scope
+    assert "--online" in report.scope
+
+
+def test_check_lists_the_packages_it_was_asked_about_even_when_clean(capsys):
+    assert cli.main(["check", "lodash", "colorz", "--color", "never", "--no-logo"]) == 0
+    out = capsys.readouterr().out
+    assert "lodash" in out and "clean" in out
+    assert "colorz" in out
+
+
+def test_check_reports_no_manifests_rather_than_zero_of_them(capsys):
+    """`0 manifests` in the header of a report about one package name reads
+    as a failure to find it."""
+    cli.main(["check", "lodash", "--color", "never", "--no-logo"])
+    assert "manifest" not in capsys.readouterr().out
+
+
+def test_check_exits_non_zero_at_the_threshold(capsys):
+    assert cli.main(["check", "colorz", "--fail-on", "medium", "--color", "never", "--no-logo"]) == 1
+    assert cli.main(["check", "colorz", "--fail-on", "high", "--color", "never", "--no-logo"]) == 0
+
+
+def test_check_rejects_an_empty_name(capsys):
+    assert cli.main(["check", "npm:", "--color", "never", "--no-logo"]) == 2
+
+
+def test_check_makes_no_network_call_without_online(monkeypatch):
+    """Same guarantee as `scan`. Naming a package is not consent to phone
+    a registry about it."""
+    import urllib.request
+
+    def forbidden(*a, **k):
+        raise AssertionError("check reached the network offline")
+
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden)
+    scan.check([scan.parse_spec("colorz"), scan.parse_spec("pypi:requsts")], Policy())

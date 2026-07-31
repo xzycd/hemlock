@@ -3,9 +3,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import time
 
-from . import __version__, brand, scan
+from . import __version__, brand, motion, scan
 from . import baseline as baseline_mod
 from . import policy as policy_mod
 from . import report as fmt
@@ -25,6 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("path", nargs="?", default=".", help="project directory (default: .)")
     _shared(s)
     s.add_argument("--all", action="store_true", help="list clean packages too")
+
+    c = sub.add_parser("check", help="judge packages by name, before you install them")
+    c.add_argument("specs", nargs="+", metavar="PACKAGE",
+                   help="name[@version], optionally prefixed npm: or pypi:")
+    c.add_argument("--ecosystem", choices=scan.ECOSYSTEMS, default="npm",
+                   help="which registry an unprefixed name belongs to (default: npm)")
+    _shared(c)
 
     d = sub.add_parser("diff", help="score only what a change adds or moves")
     d.add_argument("manifests", nargs="*", metavar="MANIFEST",
@@ -69,6 +75,7 @@ def _shared(sp) -> None:
     sp.add_argument("--color", choices=["auto", "always", "never"], default="auto")
     sp.add_argument("--ignore-baseline", action="store_true",
                     help="report accepted findings too, instead of only new ones")
+    sp.add_argument("--no-logo", action="store_true", help="skip the wordmark")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -98,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
 
     return {
         "scan": _scan,
+        "check": _check,
         "diff": _diff,
         "why": _why,
         "baseline": _baseline,
@@ -108,41 +116,28 @@ def main(argv: list[str] | None = None) -> int:
 # --------------------------------------------------------------------------
 
 
-# Nothing is drawn for the first fraction of a second. A scan that finishes in
-# three milliseconds should not flash a progress bar on its way past, and a
-# scan that takes ten seconds should not look like a hung terminal.
-QUIET_SECONDS = 0.15
-# Redraw cadence. Also the spinner's frame rate, since the two are the same
-# event: the bar only moves when there is new work to report.
-TICK_SECONDS = 0.06
-
-
-def _progress_for(args):
+def _ticker_for(args):
+    """The live line, or nothing at all when there is nobody to watch it."""
     if args.format != "terminal" or not sys.stderr.isatty():
         return None
-    ink = fmt.Ink(fmt.color_depth(args.color, sys.stderr))
-    started = time.perf_counter()
-    state = {"last": 0.0, "step": 0}
-
-    def report(label: str, done: int, total: int) -> None:
-        now = time.perf_counter()
-        if now - started < QUIET_SECONDS or now - state["last"] < TICK_SECONDS:
-            return
-        state["last"] = now
-        state["step"] += 1
-        report.drew = True
-        print("\r\033[K" + fmt.progress_line(label, done, total, ink, step=state["step"]),
-              end="", file=sys.stderr, flush=True)
-
-    report.drew = False
-    return report
+    if os.environ.get("CI") or os.environ.get("HEMLOCK_NO_ANIMATION"):
+        return None
+    return motion.Ticker(fmt.Ink(fmt.color_depth(args.color, sys.stderr)))
 
 
-def _clear(progress) -> None:
-    """Only erase a line that was actually written, or a fast scan leaves a
-    stray escape on stderr for nothing."""
-    if getattr(progress, "drew", False):
-        print("\r\033[K", end="", file=sys.stderr, flush=True)
+def _launch(args) -> None:
+    """The wordmark, at the top of an interactive scan.
+
+    Gated on stdout being a terminal rather than stderr, because this one is
+    part of the report: redirect the report and you asked for the report, not
+    for five rows of block letters at the top of the file.
+    """
+    if args.format != "terminal" or args.no_logo or not sys.stdout.isatty():
+        return
+    if os.environ.get("HEMLOCK_NO_LOGO"):
+        return
+    depth = fmt.color_depth(args.color)
+    print(brand.logo(color=depth, animate=brand.wants_animation(depth), version=__version__))
 
 
 def _policy(args, root: str):
@@ -181,10 +176,17 @@ def _scan(args, ink: fmt.Ink) -> int:
         print(f"hemlock: {args.path} is not a directory", file=sys.stderr)
         return 2
 
+    _launch(args)
     pol, fail_on = _policy(args, root)
-    progress = _progress_for(args)
-    report = scan.run(root, pol, online=args.online, progress=progress)
-    _clear(progress)
+    ticker = _ticker_for(args)
+    try:
+        if ticker:
+            ticker.start()
+        report = scan.run(root, pol, online=args.online,
+                          progress=ticker.update if ticker else None)
+    finally:
+        if ticker:
+            ticker.stop()
 
     # A baseline present in the project is applied by default. That is the
     # whole point of committing one: CI should stop failing on the backlog
@@ -207,12 +209,49 @@ def _scan(args, ink: fmt.Ink) -> int:
     return _exit_code(report, fail_on)
 
 
+def _check(args, ink: fmt.Ink) -> int:
+    specs = [scan.parse_spec(s, args.ecosystem) for s in args.specs]
+    if any(not p.name for p in specs):
+        print("hemlock: give a package name, e.g. hemlock check chalk@5.6.1", file=sys.stderr)
+        return 2
+
+    _launch(args)
+    # No project root, so config discovery starts where the user is standing.
+    # Running `check` inside a repository should respect that repository's
+    # disabled rules and suppressions.
+    pol, fail_on = _policy(args, os.getcwd())
+    ticker = _ticker_for(args)
+    try:
+        if ticker:
+            ticker.start()
+        report = scan.check(specs, pol, online=args.online,
+                            progress=ticker.update if ticker else None)
+    finally:
+        if ticker:
+            ticker.stop()
+
+    if args.format == "json":
+        print(fmt.as_json(report))
+    elif args.format == "sarif":
+        print(fmt.as_sarif(report))
+    elif args.format == "markdown":
+        print(fmt.as_markdown(report))
+    else:
+        # Always list every package asked about, clean ones included. Naming a
+        # package is the question; "nothing flagged" without saying which of
+        # the three you meant is not an answer to it.
+        print(fmt.terminal(report, ink, show_all=True, fail_on=fail_on))
+
+    return _exit_code(report, fail_on)
+
+
 def _diff(args, ink: fmt.Ink) -> int:
     from . import diff as diff_mod
 
+    _launch(args)
     root = os.path.abspath(args.path)
     pol, fail_on = _policy(args, root)
-    progress = _progress_for(args)
+    ticker = _ticker_for(args)
 
     if args.since:
         if args.manifests:
@@ -248,8 +287,14 @@ def _diff(args, ink: fmt.Ink) -> int:
         print("hemlock: give two manifests, or --since <ref>", file=sys.stderr)
         return 2
 
-    report = diff_mod.run(base, head, pol, root, online=args.online, progress=progress, labels=labels)
-    _clear(progress)
+    try:
+        if ticker:
+            ticker.start()
+        report = diff_mod.run(base, head, pol, root, online=args.online,
+                              progress=ticker.update if ticker else None, labels=labels)
+    finally:
+        if ticker:
+            ticker.stop()
 
     if args.format == "json":
         print(fmt.as_json_diff(report))

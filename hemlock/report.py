@@ -32,7 +32,6 @@ from .ui import (
     link,
     linkify,
     panel,
-    progress_line,
     rail,
     registry_url,
     spinner_frame,
@@ -45,7 +44,7 @@ from .ui import (
 # Re-exported so `report` stays the one import a caller needs for output.
 __all__ = [
     "ASCII", "UNICODE", "Ink", "badge", "color_depth", "duration", "gauge",
-    "progress_line", "spinner_frame", "want_color", "wants_links", "width",
+    "spinner_frame", "want_color", "wants_links", "width",
     "terminal", "terminal_diff", "as_json", "as_json_diff", "as_markdown",
     "as_markdown_diff", "as_sarif", "explain", "rule_table", "why", "headline",
 ]
@@ -104,13 +103,21 @@ def terminal(report: Report, ink: Ink, show_all: bool = False, fail_on: str = ""
     uni = g is UNICODE
     out: list[str] = [""]
 
-    mode = "online" if report.online else "offline"
-    meta = f" {g['sep']} ".join(
-        [plural(len(report.packages), "package"), plural(len(report.manifests), "manifest"),
-         mode, duration(report.elapsed)]
-    )
-    out.append(_rule_line("hemlock", _subject(report.root), meta, ink, g, w))
+    counted = [plural(len(report.packages), "package")]
+    # `check` has no manifests, and "0 manifests" in the header of a report
+    # about two package names reads as a failure to find them.
+    if report.manifests:
+        counted.append(plural(len(report.manifests), "manifest"))
+    counted += ["online" if report.online else "offline", duration(report.elapsed)]
+    meta = f" {g['sep']} ".join(counted)
+
+    subject = report.subject or _subject(report.root)
+    out.append(_rule_line("hemlock", subject, meta, ink, g, w))
     out.append("")
+
+    if report.scope:
+        out.extend(f"  {ink(line, 'dim')}" for line in textwrap.wrap(report.scope, w - INDENT))
+        out.append("")
 
     out.extend(_alarm(report, ink, w))
 
@@ -240,11 +247,15 @@ def _all_clear(report: Report, ink: Ink, w: int) -> list[str]:
     the tool cannot make."""
     offline_rules = sum(1 for r in RULES.values() if not r.online)
     online_rules = len(RULES) - offline_rules
-    read = f"{plural(len(report.packages), 'package')}, {plural(len(report.manifests), 'manifest')}"
+    read = plural(len(report.packages), "package")
+    if report.manifests:
+        read += f", {plural(len(report.manifests), 'manifest')}"
     scope = (f"{read}, all {len(RULES)} checks ran." if report.online
              else f"{read}, {offline_rules} offline checks.")
+    # `check` already carries its own line about what it could not read, and
+    # saying it twice on one screen reads as a tool arguing with itself.
     tail = ("Nothing here matched, which is all a clean scan ever means."
-            if report.online else
+            if report.online or report.scope else
             f"The {online_rules} that need the network did not run. "
             f"Add --online for registry, provenance and osv.dev.")
 

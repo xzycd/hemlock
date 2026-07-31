@@ -17,6 +17,13 @@ from .score import score_package
 @dataclass
 class Report:
     root: str
+    # What the header calls this run. A scan names the directory; `check` has
+    # no directory to name and says what it was handed instead.
+    subject: str = ""
+    # One line about what could not be looked at. `check` sets it, because a
+    # package named on the command line has no source or lockfile to read and
+    # a report that does not say so is claiming more than it found.
+    scope: str = ""
     manifests: list[str] = field(default_factory=list)
     packages: list[Package] = field(default_factory=list)
     verdicts: list[Verdict] = field(default_factory=list)
@@ -87,24 +94,90 @@ def run(root: str, policy: Policy, online: bool = False, progress=None) -> Repor
     ctx = Context(root=root, online=online, packages=packages, fresh_days=policy.fresh_days)
 
     if online and packages:
-        from .http import Http
-        from .intel import Osv
-        from .registry import Registry
-
-        http = Http()
-        ctx.registry = Registry(http)
-        # OSV goes first: it is one batched request for the whole list, and a
-        # package already reported as malware makes everything else moot.
-        Osv(http).enrich(packages, progress=_stage(progress, "checking osv.dev"))
-        ctx.registry.enrich(packages, progress=_stage(progress, "querying registries"))
-        report.http_calls, report.cache_hits = http.calls, http.hits
-        if http.failures:
-            report.warnings.append(
-                f"{len(http.failures)} lookups failed, so some online rules were skipped "
-                f"(first: {http.failures[0]})"
-            )
+        enrich(report, ctx, packages, progress)
 
     run_rules(report, policy, online, packages, ctx,
+              progress=_stage(progress, "applying rules"))
+    report.elapsed = time.perf_counter() - started
+    return report
+
+
+def enrich(report: Report, ctx: Context, packages: list[Package], progress=None) -> None:
+    """Fill in registry metadata, provenance and OSV records. Shared by
+    `scan` and `check`, which differ only in where the package list came
+    from."""
+    from .http import Http
+    from .intel import Osv
+    from .registry import Registry
+
+    http = Http()
+    ctx.registry = Registry(http)
+    # OSV goes first: it is one batched request for the whole list, and a
+    # package already reported as malware makes everything else moot.
+    Osv(http).enrich(packages, progress=_stage(progress, "checking osv.dev"))
+    ctx.registry.enrich(packages, progress=_stage(progress, "querying registries"))
+    report.http_calls, report.cache_hits = http.calls, http.hits
+    if http.failures:
+        report.warnings.append(
+            f"{len(http.failures)} lookups failed, so some online rules were skipped "
+            f"(first: {http.failures[0]})"
+        )
+
+
+ECOSYSTEMS = ("npm", "pypi")
+
+# Without a project on disk there is no package.json, no source tree and no
+# lockfile, so the install-time, code-shape and pinning rules have nothing to
+# read. Saying which rules "ran" would be true and useless; this says which
+# evidence existed.
+CHECK_SCOPE = (
+    "A name on the command line has no install scripts, no source and no lockfile "
+    "entry behind it, so only the naming checks can speak offline. "
+    "Add --online for osv.dev, build provenance and registry history."
+)
+CHECK_SCOPE_ONLINE = (
+    "A name on the command line has no install scripts, no source and no lockfile "
+    "entry behind it, so the install-time, code-shape and pinning checks had "
+    "nothing to read. Scan the project itself for those."
+)
+
+
+def parse_spec(text: str, default: str = "npm") -> Package:
+    """`chalk@5.6.1`, `pypi:requests==2.32.3`, `@types/node@20.1.0`."""
+    ecosystem = default
+    head, sep, rest = text.partition(":")
+    if sep and head in ECOSYSTEMS:
+        ecosystem, text = head, rest
+
+    name, version = text, ""
+    if ecosystem == "pypi" and "==" in text:
+        name, _, version = text.partition("==")
+    else:
+        # npm scoped names open with @, so only a later one is the version.
+        at = text.rfind("@")
+        if at > 0:
+            name, version = text[:at], text[at + 1:]
+
+    return Package(ecosystem=ecosystem, name=name.strip(), version=version.strip() or None,
+                   spec=version.strip() or None, direct=True, origin="(command line)")
+
+
+def check(specs: list[Package], policy: Policy, online: bool = False, progress=None) -> Report:
+    """Judge packages named on the command line, with no project around them.
+
+    The point is the decision you make before `npm install`, not the audit you
+    run afterwards.
+    """
+    started = time.perf_counter()
+    subject = specs[0].coord if len(specs) == 1 else f"{len(specs)} packages"
+    report = Report(root="", subject=subject, packages=specs, online=online,
+                    scope=CHECK_SCOPE_ONLINE if online else CHECK_SCOPE)
+    ctx = Context(root="", online=online, packages=specs, fresh_days=policy.fresh_days)
+
+    if online and specs:
+        enrich(report, ctx, specs, progress)
+
+    run_rules(report, policy, online, specs, ctx,
               progress=_stage(progress, "applying rules"))
     report.elapsed = time.perf_counter() - started
     return report

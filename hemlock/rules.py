@@ -325,13 +325,16 @@ def hook_reads_credentials(pkg: Package, ctx: Context):
 
 
 def _clip(text: str, width: int = 88) -> str:
+    """Evidence is data. It goes into JSON, SARIF and CI logs as well as onto
+    a terminal, so the marker is three dots rather than a typographic ellipsis
+    that some consumer downstream will have to cope with."""
     text = " ".join(text.split())
     if len(text) <= width:
         return text
-    cut = text[: width - 1]
+    cut = text[: width - 3]
     # Prefer a word boundary, but not if that throws most of the line away.
     space = cut.rfind(" ")
-    return (cut[:space] if space > width * 0.6 else cut) + "…"
+    return (cut[:space] if space > width * 0.6 else cut) + "..."
 
 
 # --------------------------------------------------------------------------

@@ -21,33 +21,41 @@ import sys
 RESET = "\033[0m"
 BOLD = "\033[1m"
 
-# (24-bit, xterm-256). Purple leads because that is what gives poison hemlock
-# away: the blotches on its stem are the one thing wild parsley does not have.
-# Severity runs magenta to teal rather than red to green, so the palette stays
-# recognisably one thing instead of borrowing a traffic light.
+# (24-bit, xterm-256). Two families and nothing else. Severity is one warm
+# ramp that heats up: grey, straw, ember, red. Purple is the brand, and it is
+# never used to mean a severity, so the eye learns that anything purple is the
+# tool talking about itself.
+#
+# The previous palette put magenta, orange, yellow, teal and green on the same
+# screen. Five hues cannot be ranked at a glance, so a reader had to fall back
+# on reading the numbers, which is what the colour was there to save them.
+# Nothing here is fully saturated; a report is read for minutes at a time.
 PALETTE = {
-    "accent":   ("#b18cff", 141),
-    "critical": ("#e857c8", 171),
-    "high":     ("#ff9152", 209),
-    "medium":   ("#dfb45f", 179),
-    "low":      ("#8db4b4", 109),
-    "clean":    ("#7fc08a", 108),
-    "dim":      ("#7c7c8a", 243),
-    "rule":     ("#b6b6e0", 146),
+    "accent":   ("#a78bfa", 141),
+    "critical": ("#dd5566", 167),
+    "high":     ("#d47b45", 173),
+    "medium":   ("#b8935a", 137),
+    # Low sits close to dim on purpose. A wall of low findings is background,
+    # and the one high finding behind it is what somebody opened this for.
+    "low":      ("#7a8194", 103),
+    "clean":    ("#6fae82", 108),
+    "dim":      ("#6b6b78", 242),
+    "rule":     ("#9a9ab8", 146),
     "paper":    ("#ffffff", 231),
-    "added":    ("#dfb45f", 179),
-    "removed":  ("#7c7c8a", 243),
+    "added":    ("#b8935a", 137),
+    "removed":  ("#6b6b78", 242),
 }
 
 # Deep at the root, pale at the tip, like the stem the tool is named after.
 # The wordmark reads down it; the spinner cycles along it.
-RAMP = [("#e3c5ff", 183), ("#d3a8ff", 177), ("#c08cff", 171), ("#a76dfa", 135), ("#8b52ef", 99)]
+RAMP = [("#dcc9fb", 189), ("#c6adf3", 183), ("#af8fe8", 141), ("#9673d8", 135), ("#7d59c4", 98)]
 
 UNICODE = {
     "full": "●", "hollow": "○", "trace": "·",
     "line": "─", "tee": "├", "pipe": "│", "elbow": "└",
     "on": "█", "off": "░", "sep": "·", "chevron": "›", "arrow": "→",
     "rail": "▌", "tl": "╭", "tr": "╮", "bl": "╰", "br": "╯", "edge": "│",
+    "ellipsis": "…",
 }
 ASCII = {
     # The tee is "+" rather than "|" so a finding branch stays distinguishable
@@ -56,6 +64,7 @@ ASCII = {
     "line": "-", "tee": "+", "pipe": "|", "elbow": "`",
     "on": "#", "off": ".", "sep": "-", "chevron": ">", "arrow": "->",
     "rail": "|", "tl": "+", "tr": "+", "bl": "+", "br": "+", "edge": "|",
+    "ellipsis": "...",
 }
 
 # CSI colour codes and OSC sequences both have to come off before any width
@@ -254,17 +263,3 @@ def pulse(text: str, step: int, ink: Ink) -> str:
     return code(RAMP[at if at < len(RAMP) else swing - at], ink.depth) + text + RESET
 
 
-def progress_line(label: str, done: int, total: int, ink: Ink, span: int = 14,
-                  step: int | None = None) -> str:
-    """The bar's leading cell is lit separately from its body. A block that
-    holds still reads as a stalled job; a moving head reads as work."""
-    g = glyphs()
-    step = done if step is None else step
-    filled = round(span * done / total) if total else 0
-    bar = (ink(g["on"] * max(0, filled - 1), "accent")
-           + (pulse(g["on"], step, ink) if filled else "")
-           + ink(g["off"] * (span - filled), "dim"))
-    return (
-        f"  {pulse(spinner_frame(step), step, ink)} {ink(f'{label:<20}', 'dim')}"
-        f"{bar}  {ink(f'{done}/{total}', 'dim')}"
-    )

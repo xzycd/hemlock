@@ -2,12 +2,14 @@
 
 import json
 import os
+import re
 import shutil
+import time
 
 import pytest
 
 from hemlock import baseline as baseline_mod
-from hemlock import brand, cli, scan, ui
+from hemlock import brand, cli, motion, scan, ui
 from hemlock import report as fmt
 from hemlock.model import RULES, Finding, Package
 from hemlock.policy import Policy
@@ -299,13 +301,94 @@ def test_pulse_is_a_no_op_without_colour():
 def test_the_progress_bar_lights_its_leading_cell_apart_from_its_body():
     """A block that holds still reads as a stalled job."""
     ink = fmt.Ink(24)
-    line = fmt.progress_line("applying rules", 50, 100, ink, span=10, step=3)
+    line = motion.frame("Vibing", "applying rules", 50, 100, 1.0, ink, step=3, span=10)
     assert ui.pulse("█", 3, ink) in line
 
 
 def test_a_progress_bar_without_colour_is_still_the_right_length():
-    line = fmt.progress_line("applying rules", 50, 100, fmt.Ink(False), span=10)
+    line = motion.frame("Vibing", "applying rules", 50, 100, 1.0, fmt.Ink(False), 0, span=10)
     assert line.count("█") + line.count("░") == 10
+
+
+# The spinner, then the word, up to whichever ellipsis the glyph set is using.
+WORD = re.compile(r"^\s*\S\s+(.+?)(?:…|\.\.\.)")
+
+
+class Sink:
+    """Stands in for stderr. Not a tty, so nothing else would draw to it."""
+
+    def __init__(self):
+        self.text = ""
+
+    def write(self, s):
+        self.text += s
+
+    def flush(self):
+        pass
+
+    def frames(self):
+        return [f for f in self.text.split("\r\033[K") if f.strip()]
+
+
+def test_the_line_keeps_moving_while_the_work_stands_still():
+    """The whole reason the display has its own thread. A scan blocked on
+    osv.dev used to sit with a frozen spinner, which reads as a hung process."""
+    sink = Sink()
+    ticker = motion.Ticker(fmt.Ink(24), stream=sink, quiet=0.0, tick=0.01)
+    ticker.update("checking osv.dev", 3, 10)
+    with ticker:
+        time.sleep(0.25)          # no update() at all in here
+    assert len(sink.frames()) > 5
+
+
+def test_the_word_changes_and_never_repeats_itself_back_to_back():
+    sink = Sink()
+    ticker = motion.Ticker(fmt.Ink(False), stream=sink, quiet=0.0, tick=0.01,
+                           dwell=(0.02, 0.03))
+    ticker.update("applying rules", 1, 10)
+    with ticker:
+        time.sleep(0.4)
+    said = [m.group(1) for m in (WORD.match(f) for f in sink.frames()) if m]
+    assert len(said) > 5, "the line barely drew"
+    assert len(set(said)) > 1, "the word never changed"
+
+
+def test_a_word_is_never_replaced_by_itself():
+    """Left to chance, one pick in twenty-eight lands on the word already up,
+    and the line looks stuck for two dwells running."""
+    ticker = motion.Ticker(fmt.Ink(False), stream=Sink())
+    for word in motion.WORDS:
+        assert ticker._next(word) != word
+
+
+def test_a_scan_too_short_to_watch_draws_nothing():
+    """A three millisecond scan should not flash a progress bar on its way
+    past, and should leave no stray escape sequence behind either."""
+    sink = Sink()
+    ticker = motion.Ticker(fmt.Ink(24), stream=sink, tick=0.01)
+    ticker.update("applying rules", 1, 10)
+    with ticker:
+        time.sleep(0.05)
+    assert sink.text == ""
+
+
+def test_the_ticker_erases_the_line_it_drew():
+    sink = Sink()
+    ticker = motion.Ticker(fmt.Ink(24), stream=sink, quiet=0.0, tick=0.01)
+    ticker.update("applying rules", 5, 10)
+    with ticker:
+        time.sleep(0.15)
+    assert sink.text.endswith("\r\033[K")
+
+
+def test_the_bar_only_moves_when_the_work_does():
+    """The spinner and the word are time passing. The bar is not, and a test
+    that lets it drift on its own would let the display start lying."""
+    ink = fmt.Ink(False)
+    at_one = motion.frame("Vibing", "applying rules", 1, 10, 9.0, ink, step=1, span=10)
+    later = motion.frame("Vibing", "applying rules", 1, 10, 90.0, ink, step=99, span=10)
+    on = ui.glyphs()["on"]
+    assert at_one.count(on) == later.count(on) == 1
 
 
 def test_rule_evaluation_reports_progress(project):
