@@ -236,6 +236,88 @@ def test_an_offline_scan_opens_no_connection(monkeypatch):
     assert cli.main(["scan", fixture, "--format", "json", "--fail-on", "never"]) == 0
 
 
+def _pypi_docs(name="hemlock-scan", version="0.5.0", attested=True):
+    """A versionless PyPI lookup, the shape `hemlock check <name>` produces."""
+    wheel = f"{name.replace('-', '_')}-{version}-py3-none-any.whl"
+    docs = {
+        f"https://pypi.org/pypi/{name}/json": {
+            "info": {"version": version, "home_page": f"https://github.com/acme/{name}"},
+            "urls": [{
+                "filename": wheel,
+                "packagetype": "bdist_wheel",
+                "size": 88634,
+                "upload_time_iso_8601": "2026-07-31T17:40:00Z",
+            }],
+        },
+    }
+    if attested:
+        docs[f"https://pypi.org/integrity/{name}/{version}/{wheel}/provenance"] = {
+            "attestation_bundles": [{
+                "publisher": {
+                    "kind": "GitHub",
+                    "repository": f"acme/{name}",
+                    "workflow": "release.yml",
+                    "environment": "pypi",
+                },
+                "attestations": [],
+            }],
+        }
+    return docs
+
+
+def test_a_bare_pypi_name_still_gets_its_provenance_checked():
+    """PEP 740 attestations attach to a file, so finding one needs a version.
+    The npm branch resolved `latest` and this one did not, so `hemlock check
+    <name>` reported every signed package as unsigned. hemlock's own 0.5.0
+    release was the first thing it accused."""
+    http = FakeHttp(_pypi_docs())
+    meta = Registry(http)._pypi("hemlock-scan", None)
+
+    assert meta["resolved_version"] == "0.5.0"
+    assert meta["provenance"], "a signed release was reported as having no attestation"
+    assert meta["provenance"]["repository"] == "acme/hemlock-scan"
+    assert meta["provenance"]["workflow"] == "release.yml"
+
+
+def test_an_unsigned_release_is_still_reported_as_unsigned():
+    """The fix above must not turn HEM601 off. A 404 from the integrity
+    endpoint is the genuine no-provenance answer and has to survive."""
+    http = FakeHttp(_pypi_docs(attested=False))
+    meta = Registry(http)._pypi("hemlock-scan", None)
+    assert meta["resolved_version"] == "0.5.0"
+    assert meta["provenance"] is None
+
+
+def test_an_explicit_version_is_not_overwritten_by_the_latest_one():
+    docs = _pypi_docs()
+    docs["https://pypi.org/pypi/hemlock-scan/0.4.1/json"] = {
+        "info": {"version": "0.5.0"},   # PyPI reports `info.version` as latest
+        "urls": [{"filename": "hemlock_scan-0.4.1-py3-none-any.whl",
+                  "packagetype": "bdist_wheel", "size": 1}],
+    }
+    meta = Registry(FakeHttp(docs))._pypi("hemlock-scan", "0.4.1")
+    assert meta["resolved_version"] == "0.4.1"
+
+
+def test_a_fresh_release_names_the_version_it_actually_found():
+    """This read `None published 0 hours ago` for a name with no version on
+    it. `pkg.version` stays whatever the manifest pinned, because
+    `floating_version` reads it to mean exactly that."""
+    from datetime import UTC, datetime
+
+    from hemlock.model import Context, Package
+    from hemlock.rules import fresh_release
+
+    pkg = Package("pypi", "hemlock-scan")
+    pkg.meta["published_at"] = datetime.now(UTC)
+    pkg.meta["resolved_version"] = "0.5.0"
+
+    evidence = list(fresh_release(pkg, Context(root=".")))
+    assert evidence and evidence[0].startswith("0.5.0 published")
+    assert "None" not in evidence[0]
+    assert pkg.version is None, "the manifest pinned nothing and that must stay true"
+
+
 def test_declared_repo_is_normalised_for_comparison():
     packument = npm_packument(
         versions={"1.0.0": {"dist": {}}},

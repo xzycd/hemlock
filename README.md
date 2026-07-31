@@ -8,6 +8,7 @@ A supply-chain scanner for npm and PyPI that flags packages *behaving* like an
 attack, instead of waiting for one to get a CVE number.
 
 [![ci](https://github.com/xzycd/hemlock/actions/workflows/ci.yml/badge.svg)](https://github.com/xzycd/hemlock/actions/workflows/ci.yml)
+[![pypi](https://img.shields.io/pypi/v/hemlock-scan)](https://pypi.org/project/hemlock-scan/)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)](#zero-dependencies-on-purpose)
@@ -90,20 +91,29 @@ is.
 
 ## Install
 
-Not on PyPI yet. Install it from here:
-
 ```bash
-pipx install git+https://github.com/xzycd/hemlock
+pipx install hemlock-scan
 ```
 
 Or without pipx, into any environment you like:
 
 ```bash
-pip install git+https://github.com/xzycd/hemlock
+pip install hemlock-scan
 ```
 
-Python 3.11 or newer, and nothing else. When `hemlock-scan` reaches PyPI this
-becomes `pipx install hemlock-scan`.
+Python 3.11 or newer, and nothing else. To try it without installing anything:
+
+```bash
+pipx run hemlock-scan scan .
+```
+
+Every release is published from a tagged commit by a GitHub Actions workflow
+with no API token involved, and carries a PEP 740 attestation naming the
+workflow that built it. Point hemlock at itself and it will tell you so:
+
+```bash
+hemlock check hemlock-scan --online
+```
 
 ## Use
 
@@ -485,7 +495,7 @@ you can write it yourself. Gate a pull request on what it introduces rather
 than on the whole tree:
 
 ```yaml
-- run: pipx install git+https://github.com/xzycd/hemlock
+- run: pipx install hemlock-scan
 - run: hemlock diff --since origin/${{ github.base_ref }} --online --fail-on high
 ```
 
