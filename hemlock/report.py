@@ -132,14 +132,14 @@ def terminal(report: Report, ink: Ink, show_all: bool = False, fail_on: str = ""
     # A rule flagging thirty packages on its own is one observation about a
     # project, not thirty. Printing it thirty times is how the finding that
     # actually failed the build ends up somewhere in the middle of a scroll.
-    crowds = _crowds(shown, fail_on)
+    crowds = _crowds(shown)
     penned = {id(v) for group in crowds for v in group}
 
     for v in shown:
         if id(v) not in penned:
             out.extend(_verdict_block(v, ink, g, w, uni, graph=report.graph))
     for group in crowds:
-        out.extend(_crowd_block(group, ink, g, w))
+        out.extend(_crowd_block(group, ink, g, w, full_names=_at_or_above(group, fail_on)))
 
     out.append(_summary(report, ink, g))
     out.extend(_verdict_line(report, ink, g, w, fail_on))
@@ -150,51 +150,78 @@ def terminal(report: Report, ink: Ink, show_all: bool = False, fail_on: str = ""
 
 # Below this a group is not worth collapsing; you may as well read them.
 CROWD_MIN = 5
-# High and critical are never collapsed, whatever the threshold is set to.
-CROWD_SEVERITIES = ("low", "medium")
+# Critical is never collapsed, and neither is anything `certain`, which is the
+# malware case. High is collapsed now: sixteen byte-identical high blocks on a
+# monorepo scan is not sixteen findings, it is one finding and fifteen
+# scrolls. Because a group keys on the whole signature, and a score is
+# computed from the rule set, every member of a group carries the same score,
+# so folding them loses nothing. What protects the reader is further down:
+# a group at or above the failing threshold lists every name it holds.
+CROWD_SEVERITIES = ("low", "medium", "high")
 SEVERITY_RANK = ["low", "medium", "high", "critical"]
 
 
-def _crowds(shown: list, fail_on: str = "") -> list[list]:
-    """Packages flagged by exactly one rule, grouped where that rule is
-    flagging a crowd of them.
+def _crowds(shown: list) -> list[list]:
+    """Packages carrying the same set of findings, grouped where there is a
+    crowd of them.
 
-    Nothing at or above the failing threshold is ever folded. Whatever broke
-    the build gets its own block, however many of them there are.
+    Grouping keys on the whole signature rather than on a single rule. A
+    fifty thousand package lockfile turned out to hold 4,745 flagged packages
+    and nine distinct signatures, which is nine observations repeated, not
+    4,745 of them. Keying on one rule left every multi-finding package to
+    print on its own, which missed most of the repetition.
     """
-    ceiling = len(SEVERITY_RANK)
-    if fail_on in SEVERITY_RANK:
-        ceiling = SEVERITY_RANK.index(fail_on)
-
-    solo: dict[str, list] = {}
+    alike: dict[tuple, list] = {}
     for v in shown:
-        if len(v.findings) != 1 or v.severity not in CROWD_SEVERITIES:
+        if v.certain or not v.findings or v.severity not in CROWD_SEVERITIES:
             continue
-        if SEVERITY_RANK.index(v.severity) >= ceiling:
-            continue
-        solo.setdefault(v.findings[0].rule.id, []).append(v)
-    groups = [g for g in solo.values() if len(g) >= CROWD_MIN]
-    return sorted(groups, key=lambda g: -max(v.score for v in g))
+        alike.setdefault(tuple(f.rule.id for f in v.findings), []).append(v)
+    groups = [g for g in alike.values() if len(g) >= CROWD_MIN]
+    return sorted(groups, key=lambda g: (-max(v.score for v in g), g[0].package.name))
 
 
-def _crowd_block(group: list, ink: Ink, g: dict, w: int) -> list[str]:
-    """One rule, every package it caught. Nothing is hidden: the names are all
-    here, they are just not each given five lines of their own."""
+def _at_or_above(group: list, fail_on: str) -> bool:
+    if fail_on not in SEVERITY_RANK:
+        return False
+    floor = SEVERITY_RANK.index(fail_on)
+    return any(SEVERITY_RANK.index(v.severity) >= floor for v in group)
+
+
+# A group of two thousand packages is one observation and two thousand names.
+# Past this many the names stop being a list you read and become a wall you
+# scroll, so the rest are counted instead. Never silently: the line says how
+# many were held back and where the full set is.
+CROWD_NAMES = 24
+
+
+def _crowd_block(group: list, ink: Ink, g: dict, w: int, full_names: bool = False) -> list[str]:
+    """One signature, every package carrying it, on a handful of lines
+    instead of a block each."""
     worst = max(group, key=lambda v: v.score)
-    sev, rule = worst.severity, group[0].findings[0].rule
+    sev, rules = worst.severity, [f.rule for f in group[0].findings]
     bar = f"  {rail(ink, sev)} "
 
+    ids = f" {g['sep']} ".join(r.id for r in rules)
+    title = rules[0].title if len(rules) == 1 else f"{rules[0].title}, and {len(rules) - 1} more"
     left = (f"{bar}{gauge(worst.score, sev, ink)}{ink(f'{worst.score:>5}', sev, 'bold')}"
-            f"  {ink(rule.id, 'rule')}  {rule.title}")
+            f"  {ink(ids, 'rule')}  {title}")
     label = ink(plural(len(group), "package"), sev)
     lines = [left + " " * max(1, w - visible(left) - visible(label)) + label]
 
-    names = ", ".join(sorted(v.package.name for v in group))
+    ordered = sorted(v.package.name for v in group)
+    # A group that broke the build is enumerated in full, however long that
+    # runs. Anything below the threshold is context, and context gets a cap.
+    names = ", ".join(ordered if full_names else ordered[:CROWD_NAMES])
+    if not full_names and len(ordered) > CROWD_NAMES:
+        names += f", and {len(ordered) - CROWD_NAMES:,} more"
     for chunk in textwrap.wrap(names, w - INDENT - 4):
         lines.append(f"{bar}  {ink(chunk, 'dim')}")
-    if rule.fix:
-        for i, chunk in enumerate(textwrap.wrap(rule.fix, w - INDENT - 9)):
-            lines.append(f"{bar}  {ink('fix', 'accent') if i == 0 else '   '}  {chunk}")
+
+    for rule in rules:
+        if rule.fix:
+            head = ink("fix", "accent") if rule is rules[0] else ink("and", "dim")
+            for i, chunk in enumerate(textwrap.wrap(rule.fix, w - INDENT - 9)):
+                lines.append(f"{bar}  {head if i == 0 else '   '}  {chunk}")
     lines.append("")
     return lines
 

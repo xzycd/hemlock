@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.5.0
+
+The theme is scale. A tool that is pleasant on a twelve package example and
+unusable on a real monorepo has only been tested on the easy case.
+
+### Added
+
+- **`hemlock update`.** Checks PyPI, falls back to the repository's tags,
+  works out whether this copy came from pipx, pip or a git checkout, and
+  builds the right command. Then it shows you that command and asks. There is
+  no silent self-update: a tool whose entire argument is that running somebody
+  else's install step is the risk does not get to make an exception for its
+  own. `--check` reports only, `--yes` skips the question, and with no
+  terminal to answer at it prints the command and stops. `hemlock --update`
+  is the same thing.
+
+- **A generated banner**, at `docs/banner.svg`, drawn from the same glyph
+  table and palette the terminal uses. A test regenerates it and fails if the
+  committed file has drifted, so the README cannot end up advertising a
+  version of the brand that no longer exists.
+
+### Changed
+
+- **A 55,000 package lockfile now scans in 1.7 seconds, down from 17.9.**
+  Comparing every name against the typosquat corpus was 93% of the runtime.
+  Two prefilters run before the dynamic programming now: strings within two
+  edits differ in length by at most two, and in at most two distinct
+  characters. Both are sound rather than heuristic, and a test checks every
+  single-edit mutation of every corpus entry against the brute-force sweep
+  they replaced. The affix rule was rebuilding its regexes per package, which
+  is two and a half million cache lookups it no longer does.
+
+- **Results group by their whole finding signature**, not by a single rule.
+  Those 55,000 packages produced 4,745 findings in nine distinct shapes, so
+  the report went from 999 lines to 69. High collapses too now, because
+  sixteen byte-identical blocks is one finding and fifteen scrolls, and every
+  member of a group carries the same score by construction. Reported malware
+  and critical still always stand alone, and a group at or above your
+  `--fail-on` threshold lists every name it holds rather than capping.
+
+- **The nearest typosquat match is now the closest one**, and stable. The old
+  sweep returned whichever match set iteration happened to reach first, so two
+  runs could name different neighbours for the same package.
+
+### Fixed
+
+- **The wordmark shredded on a narrow terminal.** It read the report's width,
+  which floors at 60 so report columns cannot collapse, and so never learned
+  the terminal was 30 columns wide. There are four sizes now and it steps down
+  rather than wrapping, ending at a plain name under about 34 columns.
+
 ## 0.4.1
 
 ### Added

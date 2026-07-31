@@ -8,6 +8,7 @@ from . import __version__, brand, motion, scan
 from . import baseline as baseline_mod
 from . import policy as policy_mod
 from . import report as fmt
+from . import update as update_mod
 from .model import RULES
 
 SEVERITY_ORDER = ["low", "medium", "high", "critical"]
@@ -18,6 +19,9 @@ BANNER = "hemlock: supply-chain scanner for npm and PyPI. Poison hemlock looks l
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="hemlock", description=BANNER)
     p.add_argument("--version", action="version", version=f"hemlock {__version__}")
+    # People reach for `--update` before they think to look for a subcommand,
+    # and being right about the spelling is not the point of the exercise.
+    p.add_argument("--update", action="store_true", help="same as `hemlock update`")
     sub = p.add_subparsers(dest="command")
 
     s = sub.add_parser("scan", help="scan a project for suspicious dependencies")
@@ -63,6 +67,11 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("rules", help="list every check")
     r.add_argument("--online", action="store_true", help="only the checks that need the network")
     r.add_argument("--color", choices=["auto", "always", "never"], default="auto")
+
+    u = sub.add_parser("update", help="check for a newer hemlock and offer to install it")
+    u.add_argument("--check", action="store_true", help="report only, never install")
+    u.add_argument("--yes", action="store_true", help="install without asking")
+    u.add_argument("--color", choices=["auto", "always", "never"], default="auto")
     return p
 
 
@@ -82,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:
+        if args.update:
+            return _update(parser.parse_args(["update"]), fmt.Ink(fmt.color_depth("auto")))
         depth = fmt.color_depth("auto")
         print(brand.logo(color=depth, animate=brand.wants_animation(depth), version=__version__))
         parser.print_help()
@@ -106,6 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     return {
         "scan": _scan,
         "check": _check,
+        "update": _update,
         "diff": _diff,
         "why": _why,
         "baseline": _baseline,
@@ -207,6 +219,66 @@ def _scan(args, ink: fmt.Ink) -> int:
         print(fmt.terminal(report, ink, show_all=args.all, fail_on=fail_on))
 
     return _exit_code(report, fail_on)
+
+
+def _update(args, ink: fmt.Ink) -> int:
+    """Check for a newer release, then offer the exact command.
+
+    Nothing is installed without a yes. hemlock's whole argument is that
+    running somebody else's install step is the risk, so it does not get to
+    make an exception for its own.
+    """
+    from .http import Http
+    from .update import installation, latest, run, upgrade_command
+
+    http = Http(ttl=900)
+    found = latest(http)
+    if not found:
+        # An answer of "nothing published" is not a failure to get an answer,
+        # and reporting it as one sends people looking at their network.
+        if http.failures:
+            print(f"\n  {ink('could not check', 'medium')}  {http.failures[0]}")
+            print(f"  you have {ink('v' + __version__, 'accent')}\n")
+            return 1
+        print(f"\n  {ink('nothing published yet', 'dim')}  "
+              f"no release on PyPI and no tag on the repository")
+        print(f"  you are running {ink('v' + __version__, 'accent')} "
+              f"{ink('from source', 'dim')}\n")
+        return 0
+
+    newest, source = found
+    mine, theirs = update_mod.parse_version(__version__), update_mod.parse_version(newest)
+    if not theirs or (mine and mine >= theirs):
+        print(f"\n  {ink('up to date', 'clean')}  hemlock {ink('v' + __version__, 'accent')} "
+              f"{ink('is the newest release', 'dim')}\n")
+        return 0
+
+    method = installation()
+    command = upgrade_command(method, on_pypi=(source == "pypi"))
+    printable = " ".join(command)
+
+    print(f"\n  {ink('update available', 'medium', 'bold')}  "
+          f"{ink('v' + __version__, 'dim')} {ink('to', 'dim')} {ink('v' + newest, 'accent', 'bold')}")
+    print(f"  {ink(f'installed with {method}', 'dim')}\n")
+    print(f"    {ink(printable, 'accent')}\n")
+
+    if args.check:
+        return 0
+    if not args.yes:
+        if not sys.stdin.isatty():
+            print(f"  {ink('run that to upgrade, or pass --yes', 'dim')}\n")
+            return 0
+        try:
+            reply = input("  run it? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 130
+        if reply not in ("y", "yes"):
+            print(f"  {ink('left alone', 'dim')}\n")
+            return 0
+
+    print("")
+    return run(command)
 
 
 def _check(args, ink: fmt.Ink) -> int:

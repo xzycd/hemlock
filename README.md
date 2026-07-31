@@ -1,12 +1,6 @@
 <div align="center">
 
-```
-██  ██  ██████  ██      ██  ██      ██████  ██████  ██    ██
-██  ██  ██      ████  ████  ██      ██  ██  ██      ██  ██
-██████  ████    ██  ██  ██  ██      ██  ██  ██      ████
-██  ██  ██      ██      ██  ██      ██  ██  ██      ██  ██
-██  ██  ██████  ██      ██  ██████  ██████  ██████  ██    ██
-```
+<img src="docs/banner.svg" alt="hemlock" width="820">
 
 **Poison hemlock looks like parsley.**
 
@@ -123,6 +117,7 @@ hemlock why left-pad              # who asked for this package
 hemlock baseline .                # accept today's findings, fail only on new ones
 hemlock explain HEM701            # why a rule exists and what to do about it
 hemlock rules                     # every check, with its weight
+hemlock update                    # check for a newer release
 ```
 
 Any scan or diff can come out as `--format terminal`, `markdown`, `json` or
@@ -175,6 +170,25 @@ alone.
 The exit code follows the same `--fail-on` threshold as everything else,
 which defaults to high. A typosquat scores medium, so gate a pre-install
 check with `--fail-on medium` if you want it to stop you.
+
+### Keeping it current
+
+```bash
+hemlock update           # check, show the command, ask before running it
+hemlock update --check   # report only
+hemlock update --yes     # skip the question
+```
+
+It works out how this copy was installed, whether by pipx, pip or a git
+checkout, and builds the right command for that. It does not run it until you
+say so. A tool whose entire argument is that running somebody else's install
+step is the risk does not get to make a quiet exception for its own, so there
+is no silent self-update and no download piped into an interpreter. With no
+terminal to answer at, it prints the command and stops.
+
+The upgrade path follows wherever the release actually is. `hemlock-scan` is
+not on PyPI yet, so today it points at the repository; the day the first
+release lands, PyPI answers and it switches over with nothing to edit.
 
 ### Reviewing a change, not a codebase
 
@@ -576,6 +590,40 @@ without colour, off when stdout is redirected, and off with `--no-logo` or
 `HEMLOCK_NO_LOGO`. Anything that delays a pipe or corrupts a redirect has
 stopped being decoration and started being a bug.
 
+It also steps down instead of wrapping. Block letters do not degrade when they
+overflow, they shred: the back half of every row lands under the front half
+and the whole thing reads as noise. So there are four sizes. Wide terminals
+get the wordmark and the face, narrower ones drop the face, narrower still
+halves the letters, and under about 34 columns it gives up and prints the
+name. The report and the mark ask different questions about width, too: a
+report takes the overflow rather than let its columns collapse, so it floors
+at 60, while the mark needs the terminal's real width or it never learns it is
+narrow.
+
+### It has to work on a real monorepo
+
+A 55,000 package lockfile scans in **1.7 seconds** offline, in about 128 MB.
+
+Getting there was one change. Comparing every package name against the whole
+typosquat corpus was 93% of the runtime, so two prefilters run before the
+dynamic programming: two strings within two edits differ in length by at most
+two, and differ in at most two distinct characters, because each character
+present in one and missing from the other costs an edit of its own. Both are
+sound rather than heuristic, and a test checks every single-edit mutation of
+every corpus entry against the brute-force sweep they replaced. That took
+50,000 packages from 17.9s to 1.7s.
+
+| packages | before | after |
+|---:|---:|---:|
+| 1,000 | 0.41s | 0.09s |
+| 10,000 | 3.45s | 0.38s |
+| 50,000 | 17.88s | 1.71s |
+
+The report has the same problem in a different form. Those 55,000 packages
+produced 4,745 findings, which sounds like a lot until you notice they came in
+**nine distinct shapes**. So results group by their whole finding signature,
+not by a single rule, and the report came down from 999 lines to 69.
+
 One rule flagging thirty packages is one observation about a project, not
 thirty, so it prints once with all thirty names rather than thirty times with
 five lines each:
@@ -587,11 +635,18 @@ five lines each:
   ▌   fix  Pin the version and commit a lockfile.
 ```
 
-Nothing is folded away that you are meant to act on. Critical and high never
-group, and neither does anything at or above the threshold you set with
-`--fail-on`, so whatever failed the build always gets its own block. That is
-the whole reason for grouping: the one finding that matters should not be
-somewhere in the middle of a scroll.
+Nothing is folded away that you are meant to act on. Reported malware and
+anything critical always stand alone, however many of them there are. Below
+that, a group carries one score because every member of it has the same one:
+a group keys on the whole finding signature, and a score is computed from the
+rule set, so folding loses nothing.
+
+The names are what matter, and there the rule is strict. A group at or above
+your `--fail-on` threshold lists every package it holds, however long that
+runs. Only groups below the threshold cap the list, and they say how many were
+held back rather than trailing off. Sixteen byte-identical high blocks is not
+sixteen findings, it is one finding and fifteen scrolls, but the sixteen names
+still have to be on the page.
 
 A running scan draws a line that keeps moving:
 
@@ -678,7 +733,10 @@ hemlock/
   report.py      what goes on the page: terminal, Markdown, JSON, SARIF
   ui.py          how it looks: colour depth, gauges, rails, panels, links
   motion.py      the live line during a scan, on its own thread
+  update.py      is there a newer release, and how was this one installed
   data.py        typosquat corpus, homoglyphs, credential paths
+tools/
+  banner.py      renders docs/banner.svg from the same glyph table
 ```
 
 A rule is a function that takes a package and yields evidence strings. Yielding

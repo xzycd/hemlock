@@ -265,3 +265,122 @@ def test_check_asks_osv_about_a_package_named_on_the_command_line(monkeypatch):
     report = scan.check([scan.parse_spec("npm:chalk@5.6.1")], Policy(), online=True)
     assert [v.package.coord for v in report.malware] == ["chalk@5.6.1"]
     assert report.worst() == "critical"
+
+
+# -- hemlock update --------------------------------------------------------
+#
+# Nothing here installs anything, and neither does hemlock without a yes.
+
+import pytest  # noqa: E402
+
+from hemlock import cli, update  # noqa: E402
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("0.5.0", (0, 5, 0)),
+    ("v0.5.0", (0, 5, 0)),
+    ("1.2", (1, 2, 0)),
+    ("10.0.3", (10, 0, 3)),
+    ("0.5.0rc1", None),      # a prerelease is not what `update` should offer
+    ("nightly", None),
+    ("", None),
+])
+def test_version_parsing(text, expected):
+    assert update.parse_version(text) == expected
+
+
+def test_the_newest_release_wins_and_prereleases_are_skipped():
+    assert update.newest(["0.9.0", "0.10.0", "0.4.1"]) == "0.10.0"
+    assert update.newest(["v1.0.0", "v0.5.0"]) == "v1.0.0"
+    assert update.newest(["1.0.0rc1", "0.9.0"]) == "0.9.0"
+    assert update.newest(["nope", "nightly"]) is None
+
+
+def test_pypi_is_preferred_and_github_is_the_fallback():
+    on_pypi = FakeHttp({update.PYPI: {"releases": {"0.4.1": [], "0.6.0": []}}})
+    assert update.latest(on_pypi) == ("0.6.0", "pypi")
+
+    only_tags = FakeHttp({update.TAGS: [{"name": "v0.5.0"}, {"name": "v0.4.1"}]})
+    assert update.latest(only_tags) == ("v0.5.0", "github")
+
+    assert update.latest(FakeHttp({})) is None
+
+
+def test_an_untagged_repository_reads_as_nothing_published_not_as_a_failure():
+    """PyPI 404s and the repo has no tags. Reporting that as a failed check
+    sends people looking at their network for a problem they do not have."""
+    http = FakeHttp({update.TAGS: []})
+    assert update.latest(http) is None
+    assert http.failures == []
+
+
+def test_how_it_was_installed(tmp_path):
+    checkout = tmp_path / "repo"
+    (checkout / ".git").mkdir(parents=True)
+    (checkout / "hemlock").mkdir()
+    assert update.installation(package_dir=str(checkout / "hemlock")) == "git"
+
+    plain = tmp_path / "site" / "hemlock"
+    plain.mkdir(parents=True)
+    assert update.installation("/usr", str(plain)) == "pip"
+    assert update.installation("/home/x/.local/pipx/venvs/hemlock-scan", str(plain)) == "pipx"
+
+
+def test_the_upgrade_command_follows_where_the_release_actually_is():
+    """`hemlock-scan` is not on PyPI yet, so the upgrade path is the
+    repository. The day a release lands, PyPI answers and this switches over
+    with nothing to edit."""
+    assert update.upgrade_command("pipx", on_pypi=True) == ["pipx", "upgrade", "hemlock-scan"]
+    assert update.upgrade_command("pipx", on_pypi=False)[:3] == ["pipx", "install", "--force"]
+    assert update.SOURCE in update.upgrade_command("pip", on_pypi=False)
+    assert "hemlock-scan" in update.upgrade_command("pip", on_pypi=True)
+    assert update.upgrade_command("git", on_pypi=True, root="/r")[:3] == ["git", "-C", "/r"]
+
+
+def _offer(monkeypatch, version, ran):
+    monkeypatch.setattr("hemlock.http.Http", lambda *a, **k: FakeHttp(
+        {update.TAGS: [{"name": version}]}))
+    monkeypatch.setattr("hemlock.update.run", lambda cmd: ran.append(cmd) or 0)
+
+
+def test_update_says_nothing_to_do_when_it_is_current(monkeypatch, capsys):
+    ran = []
+    _offer(monkeypatch, "v0.0.1", ran)
+    assert cli.main(["update", "--color", "never"]) == 0
+    assert "up to date" in capsys.readouterr().out
+    assert ran == []
+
+
+def test_update_shows_the_command_and_installs_nothing_under_check(monkeypatch, capsys):
+    ran = []
+    _offer(monkeypatch, "v99.0.0", ran)
+    assert cli.main(["update", "--check", "--color", "never"]) == 0
+    out = capsys.readouterr().out
+    assert "update available" in out and "v99.0.0" in out
+    assert ran == [], "--check must never install"
+
+
+def test_update_does_not_install_unattended(monkeypatch, capsys):
+    """A scanner whose whole argument is that running somebody else's install
+    step is the risk does not get to make an exception for its own. Without a
+    terminal to say yes at, it prints the command and stops."""
+    ran = []
+    _offer(monkeypatch, "v99.0.0", ran)
+    monkeypatch.setattr("sys.stdin", type("NoTty", (), {"isatty": lambda self: False})())
+    assert cli.main(["update", "--color", "never"]) == 0
+    assert ran == [], "installed without consent"
+    assert "--yes" in capsys.readouterr().out
+
+
+def test_update_installs_when_told_to(monkeypatch, capsys):
+    ran = []
+    _offer(monkeypatch, "v99.0.0", ran)
+    assert cli.main(["update", "--yes", "--color", "never"]) == 0
+    assert len(ran) == 1
+
+
+def test_the_update_flag_is_the_same_as_the_subcommand(monkeypatch, capsys):
+    ran = []
+    _offer(monkeypatch, "v0.0.1", ran)
+    assert cli.main(["--update"]) == 0
+    assert "up to date" in capsys.readouterr().out

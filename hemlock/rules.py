@@ -18,6 +18,7 @@ import os
 import re
 import unicodedata
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 
 from .data import AFFIXES, CREDENTIAL_PATHS, HOMOGLYPHS, POPULAR
 from .model import RULES, Context, Package, rule
@@ -37,12 +38,19 @@ def edit_distance(a: str, b: str, cutoff: int = 3) -> int:
     prev = list(range(len(b) + 1))
     for i, ca in enumerate(a, 1):
         cur = [i] + [0] * len(b)
+        low = i
         for j, cb in enumerate(b, 1):
             cost = 0 if ca == cb else 1
-            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+            best = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
             if i > 1 and j > 1 and ca == b[j - 2] and a[i - 2] == cb:
-                cur[j] = min(cur[j], prev2[j - 2] + cost)  # transposition
-        if min(cur) > cutoff:
+                best = min(best, prev2[j - 2] + cost)  # transposition
+            cur[j] = best
+            # Tracking the row minimum here rather than scanning the finished
+            # row is worth doing: this loop runs tens of millions of times on
+            # a large lockfile.
+            if best < low:
+                low = best
+        if low > cutoff:
             return cutoff + 1
         prev2, prev = prev, cur
     return prev[-1]
@@ -51,6 +59,49 @@ def edit_distance(a: str, b: str, cutoff: int = 3) -> int:
 def _bare(name: str) -> str:
     """Strip the npm scope so '@acme/react' compares against 'react'."""
     return name.split("/")[-1] if name.startswith("@") else name
+
+
+# Corpus bucketed by name length, each entry carrying its set of characters.
+# Built once per ecosystem, on first use.
+_BUCKETS: dict[str, dict[int, list[tuple[str, frozenset]]]] = {}
+
+NEAR = 2  # how many edits still counts as a near miss
+
+
+def _buckets(ecosystem: str) -> dict[int, list[tuple[str, frozenset]]]:
+    if ecosystem not in _BUCKETS:
+        by_length: dict[int, list[tuple[str, frozenset]]] = {}
+        for target in POPULAR.get(ecosystem, frozenset()):
+            by_length.setdefault(len(target), []).append((target, frozenset(target)))
+        _BUCKETS[ecosystem] = by_length
+    return _BUCKETS[ecosystem]
+
+
+@lru_cache(maxsize=8192)
+def nearest(name: str, ecosystem: str) -> tuple[int, str] | None:
+    """The closest popular name within two edits, or nothing.
+
+    Comparing every name against the whole corpus was 93% of the runtime on a
+    fifty thousand package lockfile, so two prefilters run first. Both are
+    sound rather than heuristic: strings within two edits differ in length by
+    at most two, and differ in at most two distinct characters, because each
+    character present in one and missing from the other costs an edit of its
+    own. What survives both goes to the dynamic programming.
+
+    Ties break on the lower distance and then on the name, so the same
+    lockfile always reports the same neighbour.
+    """
+    chars = frozenset(name)
+    by_length = _buckets(ecosystem)
+    best: tuple[int, str] | None = None
+    for length in range(len(name) - NEAR, len(name) + NEAR + 1):
+        for target, target_chars in by_length.get(length, ()):
+            if len(chars - target_chars) > NEAR:
+                continue
+            d = edit_distance(name, target, cutoff=NEAR)
+            if d and d <= NEAR and (best is None or (d, target) < best):
+                best = (d, target)
+    return best
 
 
 @rule(
@@ -80,14 +131,11 @@ def near_miss(pkg: Package, ctx: Context):
     name = _bare(pkg.name).lower()
     if pkg.ecosystem == "pypi":
         name = normalize(name)
-    corpus = POPULAR.get(pkg.ecosystem, frozenset())
-    if name in corpus or len(name) < 4:
+    if name in POPULAR.get(pkg.ecosystem, frozenset()) or len(name) < 4:
         return
-    for target in corpus:
-        d = edit_distance(name, target, cutoff=2)
-        if d and d <= 2 and abs(len(name) - len(target)) <= 2:
-            yield f'{d} edit{"s" if d > 1 else ""} away from "{target}"'
-            return
+    if hit := nearest(name, pkg.ecosystem):
+        d, target = hit
+        yield f'{d} edit{"s" if d > 1 else ""} away from "{target}"'
 
 
 @rule(
@@ -114,19 +162,39 @@ def affix_impersonation(pkg: Package, ctx: Context):
     name = _bare(pkg.name).lower()
     if pkg.ecosystem == "pypi":
         name = normalize(name)
-    corpus = POPULAR.get(pkg.ecosystem, frozenset())
-    if name in corpus:
+    if name in POPULAR.get(pkg.ecosystem, frozenset()):
         return
-    for affix in AFFIXES.get(pkg.ecosystem, []):
-        for stripped in (
-            re.sub(rf"^{affix}[-_.]", "", name),
-            re.sub(rf"[-_.]{affix}$", "", name),
-            re.sub(rf"^{affix}", "", name),
-            re.sub(rf"{affix}$", "", name),
-        ):
+    if hit := wearing_affix(name, pkg.ecosystem):
+        stripped, affix = hit
+        yield f'"{stripped}" with "{affix}" attached'
+
+
+# The four ways an affix can be worn, compiled once per ecosystem instead of
+# per package. Rebuilding them inside the rule cost two and a half million
+# regex cache lookups on a fifty thousand package lockfile.
+_AFFIX_FORMS: dict[str, list[tuple[str, tuple]]] = {}
+
+
+def _affix_forms(ecosystem: str) -> list[tuple[str, tuple]]:
+    if ecosystem not in _AFFIX_FORMS:
+        _AFFIX_FORMS[ecosystem] = [
+            (affix, (re.compile(rf"^{affix}[-_.]"), re.compile(rf"[-_.]{affix}$"),
+                     re.compile(rf"^{affix}"), re.compile(rf"{affix}$")))
+            for affix in AFFIXES.get(ecosystem, [])
+        ]
+    return _AFFIX_FORMS[ecosystem]
+
+
+@lru_cache(maxsize=8192)
+def wearing_affix(name: str, ecosystem: str) -> tuple[str, str] | None:
+    """A popular name with something bolted on, or nothing."""
+    corpus = POPULAR.get(ecosystem, frozenset())
+    for affix, forms in _affix_forms(ecosystem):
+        for form in forms:
+            stripped = form.sub("", name, count=1)
             if stripped != name and stripped in corpus and len(stripped) >= 4:
-                yield f'"{stripped}" with "{affix}" attached'
-                return
+                return stripped, affix
+    return None
 
 
 @rule(

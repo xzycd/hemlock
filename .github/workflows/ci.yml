@@ -56,6 +56,11 @@ jobs:
             echo "::error::hemlock diff did not flag the added typosquat"
             exit 1
           } || echo "typosquat flagged as expected"
+      # Offline, so it exercises the plumbing without depending on PyPI or
+      # the GitHub API being up. --check can never install anything.
+      - name: update never installs on its own
+        run: hemlock update --check
+
       - name: check judges a bare name
         run: |
           hemlock check colorz --fail-on medium && {
