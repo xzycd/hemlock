@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
+
+The worst answer a scanner can give is a confident wrong one. `hemlock check`
+printed `clean` for a name no registry has anything under, which covers both
+the package you cannot install because you typed it wrong and the internal
+name somebody else is free to publish over.
 
 ### Added
 
