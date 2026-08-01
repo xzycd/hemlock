@@ -20,6 +20,28 @@ USER_AGENT = "hemlock (+https://github.com/xzycd/hemlock)"
 DEFAULT_TTL = 6 * 3600
 
 
+class _Absent:
+    """What a 404 returns when the caller asked for one.
+
+    Falsy, so every `if not doc` reading it as "nothing usable came back"
+    still holds. Identity is what separates it from `None`: "the registry has
+    no such package" and "we could not ask the registry" are different
+    answers, and a tool that reports the second as the first tells you a
+    package does not exist every time a DNS lookup times out.
+    """
+
+    __slots__ = ()
+
+    def __bool__(self) -> bool:
+        return False
+
+    def __repr__(self) -> str:
+        return "ABSENT"
+
+
+ABSENT = _Absent()
+
+
 def default_cache_dir() -> str:
     base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
     return os.path.join(base, "hemlock")
@@ -61,11 +83,12 @@ class Http:
     # -- requests ---------------------------------------------------------
 
     def get(self, url: str, allow_404: bool = False):
-        """Returns the decoded body, or None. A 404 is a fact, not a failure,
-        when the caller says so: 'this package has no provenance' is an
-        answer, and caching it stops us asking again every run."""
+        """Returns the decoded body, ABSENT for a 404 the caller allowed, or
+        None when the request did not complete. A 404 is a fact, not a
+        failure, when the caller says so: 'this package has no provenance' is
+        an answer, and caching it stops us asking again every run."""
         if (hit := self._read(url)) is not None:
-            return None if hit == {"__absent__": True} else hit
+            return ABSENT if hit == {"__absent__": True} else hit
 
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"})
         try:
@@ -75,7 +98,7 @@ class Http:
         except urllib.error.HTTPError as exc:
             if exc.code == 404 and allow_404:
                 self._write(url, {"__absent__": True})
-                return None
+                return ABSENT
             self.failures.append(f"{_short(url)}: HTTP {exc.code}")
             return None
         except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:

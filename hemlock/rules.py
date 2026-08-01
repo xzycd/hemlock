@@ -592,6 +592,21 @@ def insecure_transport(pkg: Package, ctx: Context):
         yield pkg.resolved
 
 
+_OFF_REGISTRY = re.compile(r"^(git\+|git:|file:|link:|https?://(?!registry\.))")
+
+
+def _off_registry(pkg: Package) -> str:
+    """Where a package came from, when that is not the registry.
+
+    Two rules need this answered the same way: one reports the source, and one
+    has to stay quiet about a name the registry was never going to hold.
+    """
+    src = str(pkg.resolved or pkg.spec or "")
+    if "registry.npmjs.org" in src or "files.pythonhosted.org" in src:
+        return ""
+    return src if (pkg.meta.get("vcs") or _OFF_REGISTRY.match(src)) else ""
+
+
 @rule(
     "HEM404",
     title="Installed from outside the registry",
@@ -609,11 +624,8 @@ def insecure_transport(pkg: Package, ctx: Context):
     """,
 )
 def off_registry_source(pkg: Package, ctx: Context):
-    src = pkg.resolved or pkg.spec or ""
-    if pkg.meta.get("vcs") or re.match(r"^(git\+|git:|file:|link:|https?://(?!registry\.))", str(src)):
-        if "registry.npmjs.org" in str(src) or "files.pythonhosted.org" in str(src):
-            return
-        yield _clip(str(src), 100)
+    if source := _off_registry(pkg):
+        yield _clip(source, 100)
 
 
 @rule(
@@ -801,6 +813,48 @@ def _kb(n: int) -> str:
     return f"{n / 1024:.0f} KB" if n < 1024 * 1024 else f"{n / 1048576:.1f} MB"
 
 
+@rule(
+    "HEM507",
+    title="The registry has no package by this name",
+    category="registry",
+    weight=35,
+    online=True,
+    explain="""
+    The registry answered that it holds nothing under this name. That is not
+    a clean result, and it is not something you can install either.
+
+    There are two readings and they want different answers. The first is a
+    typo. The spelling is the whole finding, and correcting it ends the
+    matter. What you should not do is leave the misspelling sitting in a
+    manifest for later: names people get wrong are the names that get
+    claimed, and whoever claims one inherits every install that repeats the
+    mistake.
+
+    The second reading is dependency confusion. An internal package name is
+    absent from the public registry only until somebody else publishes it,
+    and a resolver asked for a name that then exists in two places usually
+    takes the higher version number rather than the closer index. Alex Birsan
+    collected internal names from leaked manifests and public JavaScript in
+    2021, published packages under those names, and had code executing inside
+    Apple, Microsoft, PayPal and more than thirty other companies. Every one
+    of those names looked exactly like this the day before he took it.
+
+    Which reading applies is a question about the name, not about the
+    registry. Keep an internal name behind a single index you control, or
+    register it in public yourself so that nobody else can.
+    """,
+)
+def not_published(pkg: Package, ctx: Context):
+    if not pkg.meta.get("unpublished"):
+        return
+    # A workspace member, an editable checkout or a git dependency was never
+    # going to be on the registry, so its absence there is not a signal.
+    # HEM404 already reports where those actually come from.
+    if any(pkg.meta.get(k) for k in ("workspace", "link", "vcs")) or _off_registry(pkg):
+        return
+    yield f"{'npm' if pkg.ecosystem == 'npm' else 'PyPI'} has no package under this name"
+
+
 # --------------------------------------------------------------------------
 # build provenance (requires --online)
 # --------------------------------------------------------------------------
@@ -973,6 +1027,8 @@ REMEDIES = {
     "HEM504": "Find out which dependency asked for this before trusting it.",
     "HEM505": "Prefer a package whose source you can read.",
     "HEM506": "Find out what the extra weight is before installing it.",
+    "HEM507": "Check the spelling first. If the name is one of your own, claim it in public or point the "
+              "resolver at a single index you control.",
     "HEM601": "Nothing to fix directly. It costs you the ability to check the tarball against the tag.",
     "HEM602": "Confirm the maintainers control the repository the attestation names.",
     "HEM701": "Remove it, then rotate every credential the install could reach.",

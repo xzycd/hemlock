@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- **`HEM507`, for a name the registry has nothing under.** `hemlock check
+  some-name-that-does-not-exist --online` printed `clean` and scored 0. The
+  npm lookup had been recording that 404 as `unpublished` all along and no
+  rule ever read the flag; the PyPI lookup did not record it at all. Both do
+  now, and a name that resolves to nothing scores 35.
+
+  Two different things produce that answer and the rule is written for both.
+  One is a typo, where the name is the entire finding and there was nothing to
+  install either way. The other is dependency confusion: an internal name is
+  missing from the public registry only until somebody else publishes it,
+  which is how Alex Birsan had code running inside Apple, Microsoft, PayPal
+  and more than thirty other companies in 2021.
+
+- **A headline for it, printed above the near-miss one.** Absence scores like
+  any other finding rather than becoming a third state next to clean and
+  flagged. `--fail-on`, the exit code, the baseline and both machine formats
+  key on severity, so a new kind of result means teaching all of them what to
+  do with it, and the answer every time is "treat it like a finding". What a
+  state would have bought is wording, and the wording cost one line: a
+  misspelled name is now told that it does not exist before it is told what it
+  resembles.
+
 ### Fixed
 
 - **`hemlock update` announced the command after running it.** The child
@@ -10,6 +34,20 @@
   Redirected to a file or read back from a CI log, the whole of pip's output
   came out above the line explaining what was about to run. Interactive use
   was never affected, which is why it survived the release.
+
+- **A 404 and a lookup that failed are different answers.** `Http.get`
+  returned `None` for both, so nothing downstream could tell "npm has no
+  package by that name" from "the request never completed". Left alone, that
+  would have HEM507 announcing that chalk does not exist every time a DNS
+  lookup was slow. An allowed 404 now returns `ABSENT`, which is falsy, so
+  every `if not doc` that reads it as nothing usable still reads correctly.
+
+- **A workspace member is not a missing package.** A monorepo lists its own
+  workspaces in its lockfile and every one of them 404s on npm. The lockfile
+  parser now marks entries keyed by a directory rather than an install path,
+  and HEM507 stays quiet about those, about the symlinks npm writes for them,
+  and about editable checkouts and git dependencies. HEM404 already says
+  where all of those actually come from.
 
 ## 0.5.1
 

@@ -92,6 +92,11 @@ def _parse_lockfile(doc: dict, rel: str) -> list[Package]:
             pkg.meta["hasInstallScript"] = True
         if entry.get("link"):
             pkg.meta["link"] = True
+        if "node_modules/" not in install_path:
+            # A workspace member, keyed by its own directory rather than an
+            # install path. It is part of this project, so nothing published
+            # is expected to match it and HEM507 has to leave it alone.
+            pkg.meta["workspace"] = True
         out.append(pkg)
 
     if out:

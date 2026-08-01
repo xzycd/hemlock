@@ -264,8 +264,8 @@ def test_rule_counts_match_the_readme():
     """The README quotes these numbers. Adding a rule should force an edit."""
     readme = open(os.path.join(os.path.dirname(__file__), "..", "README.md")).read()
     offline = [r for r in RULES.values() if not r.online]
-    assert (len(RULES), len(offline)) == (25, 15)
-    assert "Twenty-five rules" in readme and "Fifteen need no network" in readme
+    assert (len(RULES), len(offline)) == (26, 15)
+    assert "Twenty-six rules" in readme and "Fifteen need no network" in readme
 
 
 def test_only_reported_facts_are_certain():
