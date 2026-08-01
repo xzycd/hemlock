@@ -352,7 +352,7 @@ ignore it. Every finding here ends with the command that explains itself.
 
 ## What it checks
 
-Twenty-five rules in seven categories. Fifteen need no network.
+Twenty-six rules in seven categories. Fifteen need no network.
 
 Identity and naming, for packages pretending to be another one:
 
@@ -399,6 +399,7 @@ Registry trust, for what the registry already knows (needs `--online`):
 | `HEM504` | Almost nobody installs this | 20 |
 | `HEM505` | No source repository | 15 |
 | `HEM506` | Release size jumped sharply | 25 |
+| `HEM507` | The registry has no package by this name | 35 |
 
 Build provenance, for whether the artifact can be traced to source
 (needs `--online`):

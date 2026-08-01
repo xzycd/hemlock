@@ -82,6 +82,11 @@ HEADLINES = [
                "{n} packages were published by accounts that had not published them before."),
     ("HEM103", "{n} package name carries a look-alike character.",
                "{n} package names carry a look-alike character."),
+    # Above HEM101 on purpose. When a misspelled name fires both, "it does not
+    # exist" is the sentence that answers the question, and "it is a keystroke
+    # away from one that does" is the detail underneath it.
+    ("HEM507", "{n} package is not on the registry at all.",
+               "{n} packages are not on the registry at all."),
     ("HEM301", "{n} package ships deliberately unreadable code.",
                "{n} packages ship deliberately unreadable code."),
     ("HEM101", "{n} package is a keystroke or two from one you probably meant.",

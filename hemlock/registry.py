@@ -11,7 +11,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
-from .http import Http
+from .http import ABSENT, Http
 from .model import Package
 from .provenance import npm_provenance, pypi_provenance, repo_slug
 from .pypi import normalize
@@ -61,7 +61,10 @@ class Registry:
         quoted = urllib.parse.quote(name, safe="@")
         doc = self.http.get(f"{NPM_REGISTRY}/{quoted}", allow_404=True)
         if not doc:
-            return {"unpublished": True} if doc is None else {}
+            # The packument URL carries no version, so a 404 here is the
+            # registry saying it has nothing under this name at all. A
+            # request that failed says nothing and must not be read as one.
+            return {"unpublished": True} if doc is ABSENT else {}
 
         versions = doc.get("versions") or {}
         times = doc.get("time") or {}
@@ -125,7 +128,16 @@ class Registry:
         path = f"{slug}/{urllib.parse.quote(version, safe='')}/json" if version else f"{slug}/json"
         doc = self.http.get(f"{PYPI}/{path}", allow_404=True)
         if not doc:
-            return {}
+            if doc is not ABSENT:
+                return {}
+            # Unlike npm's packument, this URL carries the version, so a 404
+            # covers two different answers: no such project, or a project
+            # with no such release. Only the first is what HEM507 reports, and
+            # telling them apart costs one request on a path that is rare by
+            # definition.
+            if version and self.http.get(f"{PYPI}/{slug}/json", allow_404=True):
+                return {}
+            return {"unpublished": True}
 
         info = doc.get("info") or {}
         files = doc.get("urls") or []

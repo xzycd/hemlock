@@ -5,22 +5,31 @@ the responses: which records get believed, how a repository URL is compared,
 and what happens when a lookup fails.
 """
 
+import json
 import os
 import urllib.request
 
 import pytest
 
+from hemlock.http import ABSENT
 from hemlock.intel import Osv
-from hemlock.model import Package
+from hemlock.model import Context, Package
 from hemlock.provenance import describe, npm_provenance, repo_slug
 from hemlock.registry import Registry
 
 
 class FakeHttp:
-    """Serves canned documents and records what was asked for."""
+    """Serves canned documents and records what was asked for.
 
-    def __init__(self, docs=None):
+    A URL it does not hold answers the way a registry answers for a name
+    nobody has published: a 404, which `allow_404` turns into ABSENT. A URL
+    listed in `failing` is a request that never completed, which is a
+    different answer and has to stay one.
+    """
+
+    def __init__(self, docs=None, failing=()):
         self.docs = docs or {}
+        self.failing = set(failing)
         self.failures = []
         self.calls = 0
         self.hits = 0
@@ -29,7 +38,13 @@ class FakeHttp:
     def get(self, url, allow_404=False):
         self.asked.append(url)
         self.calls += 1
-        return self.docs.get(url)
+        if url in self.failing:
+            self.failures.append(f"{url}: connection refused")
+            return None
+        doc = self.docs.get(url)
+        if doc is None:
+            return ABSENT if allow_404 else None
+        return doc
 
     def post(self, url, payload, cache_key=None):
         self.asked.append(url)
@@ -326,6 +341,110 @@ def test_declared_repo_is_normalised_for_comparison():
     )
     http = FakeHttp({"https://registry.npmjs.org/widget": packument})
     assert Registry(http)._npm("widget", "1.0.0")["declared_repo"] == "acme/widget"
+
+
+# -- a name that resolves to nothing ---------------------------------------
+
+
+def test_npm_records_a_name_it_has_nothing_under():
+    """The 404 was already being turned into a flag here. Nothing read it, so
+    `hemlock check some-name-that-does-not-exist --online` printed `clean`."""
+    assert Registry(FakeHttp())._npm("acme-internal-widget", None) == {"unpublished": True}
+
+
+def test_pypi_records_it_too():
+    assert Registry(FakeHttp())._pypi("acme-internal-widget", None) == {"unpublished": True}
+
+
+def test_a_lookup_that_failed_is_not_a_package_that_is_absent():
+    """Both come back with no document. Reading a timeout as 'no such package'
+    would have hemlock announce that chalk does not exist whenever a DNS
+    lookup is slow, which is worse than saying nothing."""
+    url = "https://registry.npmjs.org/chalk"
+    http = FakeHttp(failing=[url])
+    assert Registry(http)._npm("chalk", "5.6.1") == {}
+    assert http.failures, "a failed request still has to be reported as one"
+
+    pypi_url = "https://pypi.org/pypi/requests/2.32.3/json"
+    http = FakeHttp(failing=[pypi_url])
+    assert Registry(http)._pypi("requests", "2.32.3") == {}
+
+
+def test_a_release_pypi_does_not_have_is_not_the_project_being_missing():
+    """PyPI's URL carries the version, so a 404 covers two different answers.
+    Only 'no such project' is HEM507."""
+    http = FakeHttp(_pypi_docs(name="requests", version="2.32.3"))
+    meta = Registry(http)._pypi("requests", "99.0.0")
+    assert "unpublished" not in meta
+    assert "https://pypi.org/pypi/requests/json" in http.asked, "it never asked whether the name exists"
+
+
+def _absent(ecosystem, name, **meta):
+    return Package(ecosystem, name, meta={"unpublished": True, **meta})
+
+
+def test_the_rule_names_the_registry_that_answered():
+    from hemlock.rules import not_published
+
+    ctx = Context(root=".")
+    assert "npm" in list(not_published(_absent("npm", "acme-internal-widget"), ctx))[0]
+    assert "PyPI" in list(not_published(_absent("pypi", "acme-internal-widget"), ctx))[0]
+
+
+@pytest.mark.parametrize("pkg", [
+    _absent("npm", "@acme/ui", workspace=True),          # a member of this repo
+    _absent("npm", "@acme/ui", link=True),               # its node_modules symlink
+    _absent("pypi", "acme-lib", vcs=True),               # -e or a git URL
+    Package("npm", "forked-dep", resolved="git+https://github.com/acme/forked-dep.git",
+            meta={"unpublished": True}),
+])
+def test_things_the_registry_was_never_going_to_hold_stay_quiet(pkg):
+    """A monorepo lists its own workspaces in its lockfile. Every one of them
+    404s on npm, and none of them is a finding."""
+    from hemlock.rules import not_published
+
+    assert not list(not_published(pkg, Context(root=".")))
+
+
+def test_a_workspace_member_is_marked_as_one_when_the_lockfile_is_read(tmp_path):
+    """The guard above only works if the parser can tell a workspace entry
+    from a dependency. npm keys one by its directory and the other by its
+    install path."""
+    from hemlock import npm as npm_mod
+
+    lock = tmp_path / "package-lock.json"
+    lock.write_text(json.dumps({
+        "lockfileVersion": 3,
+        "packages": {
+            "": {"name": "root", "workspaces": ["packages/*"]},
+            "packages/ui": {"name": "@acme/ui", "version": "1.0.0"},
+            "node_modules/@acme/ui": {"resolved": "packages/ui", "link": True},
+            "node_modules/chalk": {"version": "5.6.1",
+                                   "resolved": "https://registry.npmjs.org/chalk/-/chalk-5.6.1.tgz"},
+        },
+    }))
+    entries = {(p.name, p.version): p for p in npm_mod.parse(str(lock), str(tmp_path))}
+    assert entries[("@acme/ui", "1.0.0")].meta.get("workspace"), "the workspace's own directory"
+    assert entries[("@acme/ui", None)].meta.get("link"), "the symlink npm writes into node_modules"
+    assert not entries[("chalk", "5.6.1")].meta.get("workspace")
+
+
+def test_check_on_a_name_that_does_not_exist_no_longer_says_clean(monkeypatch):
+    """The whole point. A typo'd name and an internal name both resolve to
+    nothing in public, and an all-clear on either is the wrong answer."""
+    from hemlock import http as http_mod
+    from hemlock import report as fmt
+    from hemlock import scan
+    from hemlock.policy import Policy
+
+    monkeypatch.setattr(http_mod, "Http",
+                        lambda *a, **k: FakeHttp({BATCH: lambda payload: {"results": [{}]}}))
+
+    report = scan.check([scan.parse_spec("npm:acme-internal-widget")], Policy(), online=True)
+    assert report.flagged, "a name the registry has nothing under came back clean"
+    assert [f.rule.id for f in report.flagged[0].findings] == ["HEM507"]
+    assert report.worst() == "medium"
+    assert fmt.headline(report) == "1 package is not on the registry at all."
 
 
 # -- check, wired to the same enrichment as scan ---------------------------

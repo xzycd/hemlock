@@ -65,5 +65,5 @@
 <rect x="824" y="164" width="30" height="30" fill="#7d59c4"/>
 <rect x="914" y="164" width="30" height="30" fill="#7d59c4"/>
 <rect x="1094" y="164" width="210" height="30" fill="#7d59c4"/>
-<text x="44" y="234" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="26" fill="#7c7c8a">poison hemlock looks like parsley<tspan fill="#a78bfa">   v0.5.1</tspan></text>
+<text x="44" y="234" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="26" fill="#7c7c8a">poison hemlock looks like parsley<tspan fill="#a78bfa">   v0.6.0</tspan></text>
 </svg>
