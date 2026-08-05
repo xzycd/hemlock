@@ -26,6 +26,8 @@ from .ui import (
     UNICODE,
     Ink,
     badge,
+    band,
+    clip,
     color_depth,
     duration,
     gauge,
@@ -45,8 +47,9 @@ from .ui import (
 __all__ = [
     "ASCII", "UNICODE", "Ink", "badge", "color_depth", "duration", "gauge",
     "spinner_frame", "want_color", "wants_links", "width",
-    "terminal", "terminal_diff", "as_json", "as_json_diff", "as_markdown",
-    "as_markdown_diff", "as_sarif", "explain", "rule_table", "why", "headline",
+    "terminal", "terminal_diff", "terminal_history", "as_json", "as_json_diff",
+    "as_json_history", "as_markdown", "as_markdown_diff", "as_sarif", "explain",
+    "rule_table", "why", "headline",
 ]
 
 MARK = {"critical": "full", "high": "full", "medium": "hollow", "low": "hollow", "clean": "trace"}
@@ -294,8 +297,17 @@ def _all_clear(report: Report, ink: Ink, w: int) -> list[str]:
     body = textwrap.wrap(f"{scope} {tail}", w - INDENT)
     lines = [f"  {rail(ink, 'clean')} {ink('nothing flagged', 'clean', 'bold')}"]
     lines += [f"  {rail(ink, 'clean')} {ink(chunk, 'dim')}" for chunk in body]
+    # The moment somebody is most likely to believe a clean tree means a clean
+    # project is the moment they have just been told everything is fine.
+    if report.online and not report.scope and report.manifests:
+        lines += [f"  {rail(ink, 'clean')} {ink(chunk, 'dim')}"
+                  for chunk in textwrap.wrap(HISTORY_HINT, w - INDENT)]
     lines.append("")
     return lines
+
+
+HISTORY_HINT = ("This is the tree as it stands. hemlock history --online reads what it used to be, "
+                "because a version you have already upgraded past was still installed at the time.")
 
 
 def _alarm(report: Report, ink: Ink, w: int) -> list[str]:
@@ -525,6 +537,296 @@ def _removed_row(pkg, ink: Ink, g: dict, w: int) -> str:
             f"{ink(pkg.name, 'removed')}")
     label = ink("removed", "dim")
     return left + " " * max(1, w - visible(left) - visible(label)) + label
+
+
+# --------------------------------------------------------------------------
+# history view
+# --------------------------------------------------------------------------
+
+# The band is drawn against the whole period the report covers, so every row
+# is on the same axis and two exposures can be compared by looking at them.
+BAND = 28
+
+
+def terminal_history(report, ink: Ink) -> str:
+    w, g = width(), ui.glyphs()
+    out: list[str] = [""]
+
+    counted = [plural(len(report.commits), "commit"), plural(len(report.manifests), "manifest")]
+    counted += ["online" if report.online else "offline", duration(report.elapsed)]
+    subject = report.subject or _subject(report.root)
+    out.append(_rule_line("hemlock history", subject, f" {g['sep']} ".join(counted), ink, g, w))
+    out.append("")
+
+    if not report.manifests:
+        return _page(out + [f"  {ink('no npm or Python manifests to follow', 'dim')}", ""])
+    if not report.commits:
+        return _page(out + [f"  {ink('no commits have touched a manifest here', 'dim')}",
+                            f"  {ink('history needs a git repository with a committed lockfile', 'dim')}", ""])
+
+    out.extend(_exposure_alarm(report, ink, w))
+
+    if line := _history_headline(report):
+        out.append("  " + ink(line, "bold"))
+        out.append("")
+
+    if report.package:
+        out.extend(_timeline_block(report, ink, g, w))
+        # The timeline colours a bad version red and stops there. Anyone who
+        # ran this with --online and got a red row is owed the record behind
+        # it and the thing to do about it.
+        for window in report.windows:
+            if window.malware or window.advisories:
+                out.extend(_window_block(report, window, ink, g, w))
+    elif report.windows:
+        for window in report.windows:
+            out.extend(_window_block(report, window, ink, g, w))
+    else:
+        out.extend(_history_all_clear(report, ink, w))
+
+    out.append(_history_summary(report, ink, g))
+    out.extend(_history_footer(report, ink, g))
+    out.append("")
+    return _page(out)
+
+
+def _fraction(report, when) -> float:
+    """Where a moment sits in the period the report covers, 0 to 1."""
+    axis = report.axis
+    if not axis:
+        return 0.0
+    first, last = axis
+    total = (last - first).total_seconds()
+    if total <= 0:
+        return 0.0
+    return min(1.0, max(0.0, (when - first).total_seconds() / total))
+
+
+def _window_block(report, window, ink: Ink, g: dict, w: int) -> list[str]:
+    sev = window.severity
+    bar = f"  {rail(ink, sev)} "
+
+    name = f"{window.name} {window.version}"
+    title = link(name, registry_url(window.ecosystem, window.name, window.version), ink)
+    mark = badge("MAL", ink) if window.malware else ink(f"{'':>5}", sev)
+    left = (f"  {rail(ink, sev)} {gauge(0, sev, ink, full=bool(window.malware))}{mark}  "
+            f"{ink(f'{window.ecosystem:<4}', 'dim')}  {title}")
+    label = ink(_lasted(window), sev)
+    out = [left + " " * max(1, w - visible(left) - visible(label)) + label]
+
+    branches: list[str] = []
+    for record in window.malware[:2]:
+        aliases = f" ({', '.join(record['aliases'][:1])})" if record.get("aliases") else ""
+        branches.append(ink(linkify(f"{record['id']}{aliases}: {clip(record['summary'], 60)}", ink), "dim"))
+    if window.advisories:
+        shown = ", ".join(window.advisories[:4])
+        more = f" and {len(window.advisories) - 4} more" if len(window.advisories) > 4 else ""
+        branches.append(ink(linkify(f"{shown}{more}", ink), "dim"))
+
+    branches.append(f"{ink('entered ', 'dim')}{_moment(window.entered, window.bounded, ink)}")
+    branches.append(f"{ink('left    ', 'dim')}" + (
+        _moment(window.left, True, ink) if window.left
+        else ink("still in the lockfile at HEAD", sev)))
+    if window.tags:
+        shipped = ", ".join(window.tags[:6])
+        if len(window.tags) > 6:
+            shipped += f" and {len(window.tags) - 6} more"
+        branches.append(f"{ink('shipped ', 'dim')}{ink(shipped, sev)}"
+                        + ink(f"  {plural(len(window.tags), 'tag')} cut while it was in the tree", "dim"))
+
+    for i, line in enumerate(branches):
+        elbow = g["elbow"] if i == len(branches) - 1 else g["tee"]
+        out.append(f"{bar}{ink(elbow, 'dim')} {line}")
+
+    drawn = band(_fraction(report, window.entered.when), _fraction(report, window.ended), ink, sev, BAND)
+    axis = report.axis
+    caption = f"{axis[0]:%Y-%m-%d} to today" if axis else ""
+    out.append(f"{bar}  {drawn}  {ink(caption, 'dim')}")
+
+    if remedy := _history_fix(window):
+        for i, chunk in enumerate(textwrap.wrap(remedy, w - INDENT - 9)):
+            out.append(f"{bar}  {ink('fix', 'accent') if i == 0 else '   '}  {chunk}")
+    out.append("")
+    return out
+
+
+# What to do about a window depends on whether it closed. A malicious version
+# you dropped last year is still an incident, because the install already
+# happened. An advisory you dropped last year is not: it is gone.
+ROTATE = ("Rotate every credential an install could reach in that window, then find out whether CI "
+          "ran one. A build that installed it is where the tokens went.")
+ROTATE_OPEN = ("This is still in the lockfile. Remove it first, then rotate every credential an "
+               "install could reach, starting with whatever CI holds.")
+
+
+def _history_fix(window) -> str:
+    if window.malware:
+        return ROTATE_OPEN if window.open else ROTATE
+    if window.advisories and window.open:
+        return RULES["HEM702"].fix
+    return ""
+
+
+def _moment(commit, bounded: bool, ink: Ink) -> str:
+    when = f"{commit.when:%Y-%m-%d}" if bounded else f"at or before {commit.when:%Y-%m-%d}"
+    return f"{ink(when, 'dim')}  {ink(commit.short, 'rule')}  {ink(clip(commit.subject, 46), 'dim')}"
+
+
+def _lasted(window) -> str:
+    days = window.days
+    if days < 1:
+        return f"{max(1, round(days * 24))} hours"
+    if days < 60:
+        return f"{round(days)} days"
+    return f"{days / 30.44:.0f} months"
+
+
+def _timeline_block(report, ink: Ink, g: dict, w: int) -> list[str]:
+    """Every version of one package, against one axis.
+
+    This is the offline half of the command, and it answers a question that
+    comes up outside an incident: when did we take this, and what did we have
+    before it.
+    """
+    out: list[str] = []
+    for window in sorted(report.windows, key=lambda x: x.entered.when):
+        sev = window.severity if window.severity != "clean" else "dim"
+        drawn = band(_fraction(report, window.entered.when),
+                     _fraction(report, window.ended), ink, sev, BAND)
+        ended = "now" if window.open else f"{window.left.when:%Y-%m-%d}"
+        dates = f"{window.entered.when:%Y-%m-%d} {g['arrow']} {ended}"
+        left = (f"  {rail(ink, window.severity)} {ink(f'{window.ecosystem:<4}', 'dim')}  "
+                f"{window.version:<14}  {drawn}  {ink(dates, 'dim')}")
+        label = ink(_lasted(window), "dim")
+        out.append(left + " " * max(1, w - visible(left) - visible(label)) + label)
+    return out + [""] if out else out
+
+
+def _exposure_alarm(report, ink: Ink, w: int) -> list[str]:
+    hits = report.exposed
+    if not hits:
+        return []
+    worst = max(hits, key=lambda x: x.days)
+    names = ", ".join(sorted({h.coord for h in hits})[:3])
+    if len({h.coord for h in hits}) > 3:
+        names += f" and {len({h.coord for h in hits}) - 3} more"
+    when = "and it is still there" if worst.open else f"until {worst.left.when:%Y-%m-%d}"
+    body = (
+        f"{names} sat in this lockfile for {_lasted(worst)}, {when}. "
+        f"Anything an install could reach in that window should be treated as taken, "
+        f"whatever the scan of your working tree says today."
+    )
+    wrapped = [ink(chunk, "critical") for chunk in textwrap.wrap(body, w - 8)]
+    return panel("EXPOSED", wrapped, ink, "critical", w) + [""]
+
+
+def _history_headline(report) -> str | None:
+    if report.package:
+        versions = len({(x.name, x.version) for x in report.windows})
+        if not versions:
+            return f'nothing matching "{report.package}" was ever pinned here.'
+        line = (f"{plural(versions, 'version')} of {report.package} "
+                f"{'has' if versions == 1 else 'have'} been in this lockfile")
+        # A version that was taken, dropped and taken again is two spans and
+        # one version, and a row count that disagrees with the sentence above
+        # it is the kind of thing that costs a reader ten seconds.
+        spans = len(report.windows)
+        return f"{line}, across {spans} spans." if spans != versions else f"{line}."
+    exposed = len({x.coord for x in report.exposed})
+    if exposed:
+        return (f"{exposed} version you once pinned is on a public malware list."
+                if exposed == 1 else
+                f"{exposed} versions you once pinned are on a public malware list.")
+    flagged = len({x.coord for x in report.flagged})
+    if flagged:
+        return (f"{flagged} version you once pinned has a published advisory against it."
+                if flagged == 1 else
+                f"{flagged} versions you once pinned have published advisories against them.")
+    return None
+
+
+def _history_all_clear(report, ink: Ink, w: int) -> list[str]:
+    if not report.online:
+        body = (f"{report.coords} distinct versions were pinned here across "
+                f"{plural(len(report.commits), 'commit')}. Nothing was checked against anything: "
+                f"add --online to put every one of them past osv.dev, or name a package to see "
+                f"when it came and went.")
+        tone = "dim"
+    else:
+        body = (f"All {report.coords} versions this project ever pinned were put past osv.dev, "
+                f"and none of them is on a malware list or carries an advisory. That covers "
+                f"what the lockfile recorded, which is what an install would have resolved to.")
+        tone = "clean"
+    lines = [f"  {rail(ink, 'clean')} {ink('never exposed' if report.online else 'read, not checked', tone, 'bold')}"]
+    lines += [f"  {rail(ink, 'clean')} {ink(chunk, 'dim')}" for chunk in textwrap.wrap(body, w - INDENT)]
+    lines.append("")
+    return lines
+
+
+def _history_summary(report, ink: Ink, g: dict) -> str:
+    bits = [plural(len(report.commits), "commit"), f"{report.coords} versions ever pinned"]
+    if report.exposed:
+        bits.append(ink(f"{len({x.coord for x in report.exposed})} malicious", "critical"))
+    advisories = len({x.coord for x in report.flagged}) - len({x.coord for x in report.exposed})
+    if advisories > 0:
+        bits.append(ink(f"{advisories} with advisories", "medium"))
+    if span := report.span:
+        bits.append(ink(f"{span[0]:%Y-%m-%d} to {span[1]:%Y-%m-%d}", "dim"))
+    return "  " + ink(f" {g['sep']} ", "dim").join(bits)
+
+
+def _history_footer(report, ink: Ink, g: dict) -> list[str]:
+    out = []
+    if report.truncated:
+        out.append("  " + ink(f"! only the newest {len(report.commits)} manifest commits were read; "
+                              f"raise it with --limit", "dim"))
+    if report.online and (report.http_calls or report.cache_hits):
+        out.append(ink(f"  {report.http_calls} requests, {report.cache_hits} served from cache", "dim"))
+    for warning in report.warnings:
+        out.append("  " + ink("! " + warning, "dim"))
+    return out
+
+
+def as_json_history(report) -> str:
+    payload = {
+        "tool": "hemlock",
+        "version": _version(),
+        "mode": "history",
+        "root": report.root,
+        "online": report.online,
+        "manifests": report.manifests,
+        "range": {
+            "commits": len(report.commits),
+            "truncated": report.truncated,
+            "from": report.span[0].isoformat() if report.span else None,
+            "to": report.span[1].isoformat() if report.span else None,
+        },
+        "summary": {
+            "versions": report.coords,
+            "exposed": len({w.coord for w in report.exposed}),
+            "with_advisories": len({w.coord for w in report.flagged}) - len({w.coord for w in report.exposed}),
+        },
+        "warnings": report.warnings,
+        "windows": [
+            {
+                "ecosystem": w.ecosystem,
+                "name": w.name,
+                "version": w.version,
+                "entered": {"sha": w.entered.sha, "date": w.entered.when.isoformat(),
+                            "subject": w.entered.subject, "exact": w.bounded},
+                "left": ({"sha": w.left.sha, "date": w.left.when.isoformat(), "subject": w.left.subject}
+                         if w.left else None),
+                "days": round(w.days, 2),
+                "commits": w.commits,
+                "tags": w.tags,
+                "still_present": w.open,
+                "malware": [m["id"] for m in w.malware],
+                "advisories": w.advisories,
+            }
+            for w in report.windows
+        ],
+    }
+    return json.dumps(payload, indent=2)
 
 
 # --------------------------------------------------------------------------

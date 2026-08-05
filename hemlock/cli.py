@@ -6,6 +6,7 @@ import sys
 
 from . import __version__, brand, motion, scan
 from . import baseline as baseline_mod
+from . import history as history_mod
 from . import policy as policy_mod
 from . import report as fmt
 from . import update as update_mod
@@ -43,6 +44,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="compare the working tree against a git ref, e.g. HEAD~1 or origin/main")
     d.add_argument("--path", default=".", help="project directory when using --since (default: .)")
     _shared(d)
+
+    h = sub.add_parser("history", help="what this project used to have installed, and whether it was safe")
+    h.add_argument("path", nargs="?", default=".", help="project directory (default: .)")
+    h.add_argument("--package", metavar="NAME",
+                   help="follow one package through the history instead of hunting for exposure")
+    h.add_argument("--limit", type=int, default=history_mod.DEFAULT_LIMIT, metavar="N",
+                   help=f"manifest commits to read, newest first (default: {history_mod.DEFAULT_LIMIT})")
+    h.add_argument("--since", metavar="REF", help="only history after this git ref")
+    h.add_argument("--online", action="store_true", help="check every version ever pinned against osv.dev")
+    h.add_argument("--fail-on", choices=SEVERITY_ORDER + ["never"], help="exit non-zero at this severity")
+    h.add_argument("--format", choices=["terminal", "json"], default="terminal")
+    h.add_argument("--config", metavar="FILE", help="path to .hemlock.toml")
+    h.add_argument("--color", choices=["auto", "always", "never"], default="auto")
+    h.add_argument("--no-logo", action="store_true", help="skip the wordmark")
 
     w = sub.add_parser("why", help="show where a package came from and what is wrong with it")
     w.add_argument("package", help="package name, or a fragment of one")
@@ -119,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         "check": _check,
         "update": _update,
         "diff": _diff,
+        "history": _history,
         "why": _why,
         "baseline": _baseline,
         "init": _init,
@@ -154,7 +170,9 @@ def _launch(args) -> None:
 
 def _policy(args, root: str):
     pol = policy_mod.load(root, args.config)
-    if args.fresh_days is not None:
+    # Not every command has a freshness window to override. `history` reads the
+    # config for its failing threshold and nothing else.
+    if getattr(args, "fresh_days", None) is not None:
         pol.fresh_days = args.fresh_days
     return pol, (args.fail_on or pol.fail_on)
 
@@ -394,6 +412,12 @@ on:
   pull_request:
   push:
     branches: [main, master]
+  schedule:
+    # A malware record is usually published after the package was already
+    # installed, so a scan that passed on Monday can be wrong about Monday by
+    # Friday. The weekly run re-asks about every version this project ever
+    # pinned, including the ones it has since upgraded past.
+    - cron: "23 5 * * 1"
 
 permissions:
   contents: read
@@ -441,7 +465,67 @@ jobs:
       - name: scan everything
         if: github.event_name != 'pull_request'
         run: hemlock scan . --online --fail-on high
+
+  # What the tree used to be. A version you have already upgraded past was
+  # still installed at the time, and the record naming it often lands later.
+  # Nothing else in CI asks this question, because everything else reads HEAD.
+  history:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install hemlock-scan
+      - run: hemlock history . --online --fail-on critical
 """
+
+
+def _history(args, ink: fmt.Ink) -> int:
+    """What this project used to have installed.
+
+    Every other command reads the working tree, which answers a question about
+    now. This one answers the question people ask when a compromise is
+    announced, which is whether they were ever on it.
+    """
+    from .diff import git_root
+
+    root = os.path.abspath(args.path)
+    if not os.path.isdir(root):
+        print(f"hemlock: {args.path} is not a directory", file=sys.stderr)
+        return 2
+    if not git_root(root):
+        print(f"hemlock: {args.path} is not inside a git repository, so there is no "
+              f"history to read", file=sys.stderr)
+        return 2
+
+    _launch(args)
+    pol, fail_on = _policy(args, root)
+    ticker = _ticker_for(args)
+    try:
+        if ticker:
+            ticker.start()
+        report = history_mod.run(root, online=args.online, package=args.package or "",
+                                 limit=args.limit, since=args.since or "",
+                                 progress=ticker.update if ticker else None)
+    finally:
+        if ticker:
+            ticker.stop()
+
+    if args.format == "json":
+        print(fmt.as_json_history(report))
+    else:
+        print(fmt.terminal_history(report, ink))
+
+    if fail_on == "never":
+        return 0
+    threshold = SEVERITY_ORDER.index(fail_on)
+    worst = [w for w in report.windows
+             if w.severity in SEVERITY_ORDER and SEVERITY_ORDER.index(w.severity) >= threshold]
+    return 1 if worst else 0
 
 
 def _why(args, ink: fmt.Ink) -> int:

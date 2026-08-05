@@ -249,8 +249,24 @@ def test_a_clean_offline_scan_says_what_it_did_not_check():
 def test_a_clean_online_scan_does_not_promise_safety():
     text = fmt.terminal(report_with(online=True), ui.Ink(False))
     assert "nothing flagged" in text
-    assert "--online" not in text
+    assert "Add --online" not in text, "it already ran online; do not sell it the flag it used"
     assert "Nothing here matched" in text
+
+
+def test_a_clean_online_scan_points_at_the_history_it_did_not_read():
+    """A tree that is clean today says nothing about the version that was
+    installed last month, and this is the moment a reader is most likely to
+    assume otherwise."""
+    text = fmt.terminal(report_with(online=True), ui.Ink(False))
+    assert "hemlock history --online" in text
+
+
+def test_the_history_hint_stays_off_a_check(monkeypatch):
+    """`check` has no project behind it, so there is no history to read and a
+    second paragraph about one is a tool arguing with itself."""
+    report = scan.Report(root="", subject="chalk", scope="no lockfile entry behind it",
+                         packages=[], online=True)
+    assert "hemlock history" not in fmt.terminal(report, ui.Ink(False))
 
 
 def test_counts_of_one_are_not_pluralised():
