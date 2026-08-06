@@ -126,6 +126,7 @@ hemlock scan .                    # offline, fast, no network at all
 hemlock scan . --online           # add registry, provenance and OSV checks
 hemlock check chalk@5.6.1         # judge a package before you install it
 hemlock diff --since origin/main  # score only what a branch adds
+hemlock history . --online        # were we ever on a version now known to be bad
 hemlock why left-pad              # who asked for this package
 hemlock baseline .                # accept today's findings, fail only on new ones
 hemlock explain HEM701            # why a rule exists and what to do about it
@@ -248,6 +249,79 @@ $ hemlock diff --since HEAD
 
 `+` is new, `~` moved, `-` left. `--since` takes any git ref. Two lockfile
 paths work too, for comparing artifacts that never shared a repository.
+
+### Were we ever exposed?
+
+Every command above reads the working tree, which answers a question about
+now. The question that gets asked on the morning a compromise is announced is
+about then: were we ever on that version, for how long, and did anything run
+an install while we were.
+
+No scanner answers it, because they all read HEAD. If you have already bumped
+past the bad release, `npm audit` says clean and it is telling the truth about
+a question nobody asked. CI installed that version on every push for six days,
+and whatever it could reach is gone.
+
+The answer is sitting in git. A lockfile is a list of exact coordinates, so
+its history is a record of exactly what would have been installed, and it can
+only change in a commit that touches it. That makes sampling those commits
+complete rather than approximate: between two of them the answer cannot have
+moved.
+
+```
+$ hemlock history . --online
+
+  hemlock history  acme-web ──────────────────────  184 commits · 2 manifests · online · 2.1s
+
+  ╭─ EXPOSED ─────────────────────────────────────────────────────────────────────────────╮
+  │  chalk@5.6.1 sat in this lockfile for 6 days, until 2025-09-14. Anything an install   │
+  │  could reach in that window should be treated as taken, whatever the scan of your     │
+  │  working tree says today.                                                             │
+  ╰───────────────────────────────────────────────────────────────────────────────────────╯
+
+  1 version you once pinned is on a public malware list.
+
+  ▌ ██████████ MAL   npm   chalk 5.6.1                                              6 days
+  ▌ ├ MAL-2025-46969 (GHSA-2v46-p5h4-248w): Malicious code in chalk (npm)
+  ▌ ├ entered 2025-09-08  7204481  bump dependencies
+  ▌ ├ left    2025-09-14  5045dc0  pin chalk back after the advisory
+  ▌ └ shipped v1.4.0  1 tag cut while it was in the tree
+  ▌   ░░░░░░░░░░░█░░░░░░░░░░░░░░░░  2025-01-04 to today
+  ▌   fix  Rotate every credential an install could reach in that window, then find out
+  ▌        whether CI ran one. A build that installed it is where the tokens went.
+
+  184 commits · 412 versions ever pinned · 1 malicious · 2025-01-04 to 2026-06-02
+```
+
+The `shipped` line is the part that turns a date range into work. Tags are
+matched by ancestry rather than by date: a release contains the commit that
+introduced the version and does not contain the one that removed it, which is
+exactly the set of artifacts built against it.
+
+This is also worth running when nothing has happened. A malware record is
+usually published days after the package was live, so a scan that passed on
+Monday can be wrong about Monday by Friday. The workflow written by `hemlock
+init` runs this weekly for that reason, and it is the only job in there that
+asks about versions the tree no longer holds.
+
+Without `--online` nothing is checked against anything, and the command
+answers the other question it is good for:
+
+```
+$ hemlock history . --package chalk
+
+  3 versions of chalk have been in this lockfile, across 4 spans.
+
+  ▌ npm   5.3.0           █████████████░░░░░░░░░░░░░░░  2025-01-04 → 2025-09-08   8 months
+  ▌ npm   5.6.1           ░░░░░░░░░░░░░█░░░░░░░░░░░░░░  2025-09-08 → 2025-09-14     6 days
+  ▌ npm   5.3.0           ░░░░░░░░░░░░░███████████████  2025-09-14 → 2026-06-02    9 months
+  ▌ npm   5.4.0           ░░░░░░░░░░░░░░░░░░░░░░░░░░░█  2026-06-02 → now           2 months
+```
+
+It reads the mainline only, because what got built and deployed is what landed
+on it, and it stops at 200 manifest commits unless you raise `--limit`. When it
+stops early it says so rather than leaving you with a shorter answer that looks
+complete.
 
 ### Saying it in the pull request
 
@@ -509,6 +583,14 @@ Or scan everything on a schedule:
 - run: hemlock scan . --online --fail-on high
 ```
 
+A weekly job should read the history as well as the tree, because a malware
+record is usually published after the package was installed. This one needs
+the full clone, so `fetch-depth: 0` on the checkout:
+
+```yaml
+- run: hemlock history . --online --fail-on critical
+```
+
 Exit codes: `0` when nothing reaches the threshold, `1` when something does,
 `2` when the scan could not run. Set the threshold with
 `--fail-on low|medium|high|critical|never`.
@@ -731,6 +813,7 @@ hemlock/
   cli.py         argument parsing, exit codes
   scan.py        find manifests, resolve packages, run rules, score
   diff.py        the same rules over only what a change added or moved
+  history.py     what the lockfile used to say, read out of git
   graph.py       who asked for a package, from the lockfiles already parsed
   baseline.py    accepting what was already there
   brand.py       the wordmark

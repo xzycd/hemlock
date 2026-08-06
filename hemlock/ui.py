@@ -197,6 +197,20 @@ def gauge(score: int, severity: str, ink: Ink, span: int = 10, full: bool = Fals
     return ink(g["on"] * filled, severity) + ink(g["off"] * (span - filled), "dim") * (filled < span)
 
 
+def band(start: float, end: float, ink: Ink, tone: str, span: int = 28) -> str:
+    """A stretch of time drawn across a fixed width.
+
+    `start` and `end` are fractions of the whole period the report covers. A
+    window narrower than one cell still gets a cell: an exposure that lasted
+    six hours draws as nothing otherwise, and nothing reads as never.
+    """
+    g = glyphs()
+    lo = max(0, min(span - 1, int(start * span)))
+    hi = max(lo + 1, min(span, round(end * span)))
+    return (ink(g["off"] * lo, "dim") + ink(g["on"] * (hi - lo), tone)
+            + ink(g["off"] * (span - hi), "dim"))
+
+
 def rail(ink: Ink, tone: str) -> str:
     """The coloured edge down the left of a result. It is what makes a block
     of findings read as one package rather than as eight loose lines."""
@@ -248,6 +262,16 @@ def linkify(text: str, ink: Ink) -> str:
 
 
 # -- misc ------------------------------------------------------------------
+
+
+def clip(text: str, width: int) -> str:
+    """Shorten for display. This one gets the typographic ellipsis, unlike the
+    evidence clipper in `rules.py`, because nothing downstream parses a line
+    that was only ever drawn on a terminal."""
+    text = " ".join(text.split())
+    if len(text) <= width:
+        return text
+    return text[: max(1, width - 1)].rstrip() + glyphs()["ellipsis"]
 
 
 def duration(seconds: float) -> str:

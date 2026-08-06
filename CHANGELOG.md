@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`hemlock history`, for the question every other command cannot answer.**
+  Everything here reads the working tree, which describes now. On the morning a
+  compromise is announced the question is about then: were we ever on that
+  version, for how long, and did anything install it. A scanner reading HEAD
+  says clean, truthfully, about a question nobody asked.
+
+  The answer is in git. A lockfile is a list of exact coordinates and it can
+  only change in a commit that touches it, so reading those commits is a
+  complete record of what an install would have resolved to rather than a
+  sample of it. Every version the project ever pinned goes to osv.dev in one
+  batch, and anything with a malware record comes back as a window: the commit
+  that introduced it, the commit that removed it, how long that took, and how
+  much of the project's life it covers.
+
+- **The releases you shipped while it was in the tree.** A date range is a
+  fact about a lockfile; `shipped v1.4.0, v1.4.1` is the same fact in the form
+  somebody has to act on, because those artifacts were built against it.
+  Matched by ancestry rather than by date, so a tag counts when it contains the
+  commit that introduced the version and not the one that removed it, which
+  holds up when releases are cut from branches.
+
+- **A weekly history job in the workflow `hemlock init` writes.** A malware
+  record is usually published days after the package was live, so a scan that
+  passed on Monday can be wrong about Monday by Friday. Nothing else in CI
+  re-asks about versions the tree no longer holds.
+
+- **`--package NAME`,** which needs no network and answers a question people
+  have outside an incident: when did this arrive, what did it replace, and how
+  long has the current one been in. Each version gets a band drawn against one
+  axis, so two spans are compared by looking at them.
+
+### Changed
+
+- **A clean online scan now says what it did not read.** The moment a reader is
+  most likely to believe a clean tree means a clean project is the moment they
+  have just been told nothing was flagged, so that block points at
+  `hemlock history --online` rather than stopping at the good news.
+
 ## 0.6.0
 
 The worst answer a scanner can give is a confident wrong one. `hemlock check`

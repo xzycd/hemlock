@@ -201,6 +201,10 @@ def test_the_generated_workflow_scans_prs_as_diffs(tmp_path):
     cli.main(["init", str(tmp_path), "--color", "never"])
     workflow = (tmp_path / ".github" / "workflows" / "hemlock.yml").read_text()
     assert "hemlock diff --since" in workflow and "hemlock scan ." in workflow
+    # The weekly job is the only one that asks about versions the tree no
+    # longer holds, and it needs the whole history to do it.
+    assert "hemlock history . --online" in workflow
+    assert "schedule:" in workflow and "fetch-depth: 0" in workflow
 
 
 # -- wordmark --------------------------------------------------------------
