@@ -1,10 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
+
+Every command in the tool read the working tree, which answers a question
+about now. This release adds the one about then, which is the question people
+ask on the morning a compromise is announced and the one a scanner reading
+HEAD cannot answer at all.
 
 ### Added
 
-- **`hemlock history`, for the question every other command cannot answer.**
+- **`hemlock history`, for the question no other command can answer.**
   Everything here reads the working tree, which describes now. On the morning a
   compromise is announced the question is about then: were we ever on that
   version, for how long, and did anything install it. A scanner reading HEAD
@@ -15,13 +20,12 @@
   complete record of what an install would have resolved to rather than a
   sample of it. Every version the project ever pinned goes to osv.dev in one
   batch, and anything with a malware record comes back as a window: the commit
-  that introduced it, the commit that removed it, how long that took, and how
-  much of the project's life it covers.
+  that introduced it, the commit that removed it, and how long that took.
 
 - **The releases you shipped while it was in the tree.** A date range is a
   fact about a lockfile; `shipped v1.4.0, v1.4.1` is the same fact in the form
-  somebody has to act on, because those artifacts were built against it.
-  Matched by ancestry rather than by date, so a tag counts when it contains the
+  somebody has to act on, because those artifacts were built against it. Tags
+  are matched by ancestry rather than by date: one counts when it contains the
   commit that introduced the version and not the one that removed it, which
   holds up when releases are cut from branches.
 
@@ -32,8 +36,8 @@
 
 - **`--package NAME`,** which needs no network and answers a question people
   have outside an incident: when did this arrive, what did it replace, and how
-  long has the current one been in. Each version gets a band drawn against one
-  axis, so two spans are compared by looking at them.
+  long the current one has been there. Each version gets a band drawn against
+  one axis, so two spans can be compared by eye.
 
 ### Changed
 

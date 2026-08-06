@@ -236,6 +236,25 @@ def test_a_full_clone_says_nothing_about_shallowness(repo):
     assert history.run(str(repo)).warnings == []
 
 
+def test_ever_stops_being_claimed_once_the_log_was_capped(repo, monkeypatch):
+    """"Every version this project ever pinned" is a claim about the whole
+    project. A capped log makes it false, and it is the sentence somebody
+    would quote in an incident review."""
+    osv_stub(monkeypatch, malicious=("nothing", "0"))
+    whole = fmt.terminal_history(history.run(str(repo), online=True), fmt.Ink(False))
+    assert "ever pinned" in whole
+
+    capped = fmt.terminal_history(history.run(str(repo), online=True, limit=2), fmt.Ink(False))
+    assert "ever pinned" not in capped
+    assert "in this window" in capped and "--limit" in capped
+
+
+def test_a_ref_git_does_not_know_is_refused_rather_than_read_as_empty(repo, capsys):
+    assert cli.main(["history", str(repo), "--since", "no-such-ref", "--color", "never"]) == 2
+    assert "does not know the ref" in capsys.readouterr().err
+    assert history.resolves(str(repo), "HEAD") is True
+
+
 def test_a_name_nobody_ever_pinned_says_so(repo):
     report = history.run(str(repo), package="left-pad")
     assert report.windows == []

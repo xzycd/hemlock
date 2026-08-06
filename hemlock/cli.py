@@ -497,9 +497,15 @@ def _history(args, ink: fmt.Ink) -> int:
     if not os.path.isdir(root):
         print(f"hemlock: {args.path} is not a directory", file=sys.stderr)
         return 2
-    if not git_root(root):
+    repo = git_root(root)
+    if not repo:
         print(f"hemlock: {args.path} is not inside a git repository, so there is no "
               f"history to read", file=sys.stderr)
+        return 2
+    # An unresolvable ref would quietly read as a project with no history, and
+    # "nothing was ever pinned here" is not a thing to say by accident.
+    if args.since and not history_mod.resolves(repo, args.since):
+        print(f"hemlock: git does not know the ref {args.since!r}", file=sys.stderr)
         return 2
 
     _launch(args)
