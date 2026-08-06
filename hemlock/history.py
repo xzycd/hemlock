@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -218,6 +219,13 @@ def blobs(repo_root: str, specs: list[str]) -> dict[str, bytes]:
 # -- history ---------------------------------------------------------------
 
 
+def resolves(repo_root: str, ref: str) -> bool:
+    """Whether git knows this ref. A `--since` nobody can resolve would
+    otherwise read as a project with no history, which is the wrong answer
+    told confidently."""
+    return bool(_git(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").strip())
+
+
 def tags_in_window(repo_root: str, entered: str, left: str | None) -> list[str]:
     """Tags that were cut while a version was in the tree.
 
@@ -253,38 +261,43 @@ def manifest_paths(root: str, repo_root: str) -> list[str]:
     return sorted(set(paths))
 
 
-def _coords_in(rel: str, raw: bytes) -> set[tuple[str, str, str]]:
+def _coords_in(tmp: str, rel: str, raw: bytes) -> set[tuple[str, str, str]]:
     """Parse one historical manifest.
 
     Every parser dispatches on the filename and a blob arrives with no name
     attached, so it gets written back out under its original basename. Only
     pinned versions count: a range says what was allowed, not what was there.
     """
-    with tempfile.TemporaryDirectory() as tmp:
-        staged = os.path.join(tmp, os.path.basename(rel))
-        with open(staged, "wb") as fh:
-            fh.write(raw)
-        return {(p.ecosystem, p.name, p.version) for p in read_manifest(staged, tmp)
-                if p.kind == "package" and p.version}
+    staged = os.path.join(tmp, os.path.basename(rel))
+    with open(staged, "wb") as fh:
+        fh.write(raw)
+    return {(p.ecosystem, p.name, p.version) for p in read_manifest(staged, tmp)
+            if p.kind == "package" and p.version}
 
 
 def snapshots(repo_root: str, commits: list[Commit], paths: list[str],
               progress=None) -> list[Snapshot]:
     """Resolve every commit, batching the reads across commits rather than
     within one. Asking per commit is a git process per commit, which is the
-    cost this was written to avoid."""
+    cost this was written to avoid.
+
+    One scratch directory serves the whole pass. Each blob is written, parsed
+    and finished with before the next one lands, so reusing the name costs
+    nothing and saves a directory per commit.
+    """
     readable = [p for p in paths if parser_for(p)]
     specs = [f"{c.sha}:{p}" for c in commits for p in readable]
     found = {c.sha: Snapshot(c) for c in commits}
 
     done = 0
-    for chunk in _chunks(specs, CHUNK):
-        for spec, raw in blobs(repo_root, chunk).items():
-            sha, _, rel = spec.partition(":")
-            found[sha].coords |= _coords_in(rel, raw)
-        done += len(chunk)
-        if progress:
-            progress(min(done, len(specs)), len(specs))
+    with tempfile.TemporaryDirectory() as tmp:
+        for chunk in _chunks(specs, CHUNK):
+            for spec, raw in blobs(repo_root, chunk).items():
+                sha, _, rel = spec.partition(":")
+                found[sha].coords |= _coords_in(tmp, rel, raw)
+            done += len(chunk)
+            if progress:
+                progress(min(done, len(specs)), len(specs))
     return [found[c.sha] for c in commits]
 
 
@@ -327,8 +340,6 @@ def windows(shots: list[Snapshot]) -> list[Window]:
 
 def run(root: str, online: bool = False, package: str = "", limit: int = DEFAULT_LIMIT,
         since: str = "", progress=None) -> HistoryReport:
-    import time
-
     from .scan import _stage
 
     started = time.perf_counter()

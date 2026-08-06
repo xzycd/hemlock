@@ -558,11 +558,16 @@ def terminal_history(report, ink: Ink) -> str:
     out.append(_rule_line("hemlock history", subject, f" {g['sep']} ".join(counted), ink, g, w))
     out.append("")
 
+    # Both of these keep the footer. A shallow clone is the ordinary reason a
+    # repository looks like it has no history, and the line explaining that is
+    # in there.
     if not report.manifests:
-        return _page(out + [f"  {ink('no npm or Python manifests to follow', 'dim')}", ""])
+        return _page(out + [f"  {ink('no npm or Python manifests to follow', 'dim')}", ""]
+                     + _history_footer(report, ink, g) + [""])
     if not report.commits:
         return _page(out + [f"  {ink('no commits have touched a manifest here', 'dim')}",
-                            f"  {ink('history needs a git repository with a committed lockfile', 'dim')}", ""])
+                            f"  {ink('history needs a git repository with a committed lockfile', 'dim')}", ""]
+                     + _history_footer(report, ink, g) + [""])
 
     out.extend(_exposure_alarm(report, ink, w))
 
@@ -608,7 +613,7 @@ def _window_block(report, window, ink: Ink, g: dict, w: int) -> list[str]:
 
     name = f"{window.name} {window.version}"
     title = link(name, registry_url(window.ecosystem, window.name, window.version), ink)
-    mark = badge("MAL", ink) if window.malware else ink(f"{'':>5}", sev)
+    mark = badge("MAL", ink) if window.malware else "     "
     left = (f"  {rail(ink, sev)} {gauge(0, sev, ink, full=bool(window.malware))}{mark}  "
             f"{ink(f'{window.ecosystem:<4}', 'dim')}  {title}")
     label = ink(_lasted(window), sev)
@@ -753,9 +758,13 @@ def _history_all_clear(report, ink: Ink, w: int) -> list[str]:
                 f"when it came and went.")
         tone = "dim"
     else:
-        body = (f"All {report.coords} versions this project ever pinned were put past osv.dev, "
-                f"and none of them is on a malware list or carries an advisory. That covers "
-                f"what the lockfile recorded, which is what an install would have resolved to.")
+        # "Every version this project ever pinned" is a claim about the whole
+        # project, and a capped log or a shallow clone makes it false.
+        scope = ("every version this project ever pinned" if _ever(report) == "ever pinned"
+                 else f"every version pinned across the {plural(len(report.commits), 'commit')} read")
+        body = (f"{report.coords} versions went past osv.dev, and none is on a malware list or "
+                f"carries an advisory. That is {scope}, which is what an install would have "
+                f"resolved to at the time.")
         tone = "clean"
     lines = [f"  {rail(ink, 'clean')} {ink('never exposed' if report.online else 'read, not checked', tone, 'bold')}"]
     lines += [f"  {rail(ink, 'clean')} {ink(chunk, 'dim')}" for chunk in textwrap.wrap(body, w - INDENT)]
@@ -763,8 +772,14 @@ def _history_all_clear(report, ink: Ink, w: int) -> list[str]:
     return lines
 
 
+def _ever(report) -> str:
+    """"Ever" is a claim about the whole project. It stops being true the
+    moment the log was capped or the clone was shallow."""
+    return "in this window" if report.truncated or report.warnings else "ever pinned"
+
+
 def _history_summary(report, ink: Ink, g: dict) -> str:
-    bits = [plural(len(report.commits), "commit"), f"{report.coords} versions ever pinned"]
+    bits = [plural(len(report.commits), "commit"), f"{report.coords} versions {_ever(report)}"]
     if report.exposed:
         bits.append(ink(f"{len({x.coord for x in report.exposed})} malicious", "critical"))
     advisories = len({x.coord for x in report.flagged}) - len({x.coord for x in report.exposed})
@@ -794,6 +809,7 @@ def as_json_history(report) -> str:
         "mode": "history",
         "root": report.root,
         "online": report.online,
+        "package": report.package or None,
         "manifests": report.manifests,
         "range": {
             "commits": len(report.commits),

@@ -257,10 +257,10 @@ now. The question that gets asked on the morning a compromise is announced is
 about then: were we ever on that version, for how long, and did anything run
 an install while we were.
 
-No scanner answers it, because they all read HEAD. If you have already bumped
-past the bad release, `npm audit` says clean and it is telling the truth about
-a question nobody asked. CI installed that version on every push for six days,
-and whatever it could reach is gone.
+`npm audit`, Dependabot and `hemlock scan` all read HEAD, so once you have
+bumped past the bad release they say clean, and they are telling the truth
+about a question nobody asked. CI installed that version on every push for six
+days, and whatever it could reach is gone.
 
 The answer is sitting in git. A lockfile is a list of exact coordinates, so
 its history is a record of exactly what would have been installed, and it can
@@ -885,8 +885,13 @@ provenance, so hemlock passes its own `HEM601`.
 The workflow refuses to publish if the tag does not match `__version__`, if the
 tests fail, or if the known-bad fixture has stopped being flagged.
 
+Bump `__version__` in `hemlock/__init__.py`, regenerate the banner, which
+carries the version in its tagline, and rename the `Unreleased` heading in the
+changelog. Then tag:
+
 ```bash
-git tag v0.4.0 && git push origin v0.4.0
+python3 tools/banner.py
+git tag -a v0.7.0 -m v0.7.0 && git push origin v0.7.0
 ```
 
 ## Roadmap
