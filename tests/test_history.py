@@ -253,6 +253,7 @@ def test_a_ref_git_does_not_know_is_refused_rather_than_read_as_empty(repo, caps
     assert cli.main(["history", str(repo), "--since", "no-such-ref", "--color", "never"]) == 2
     assert "does not know the ref" in capsys.readouterr().err
     assert history.resolves(str(repo), "HEAD") is True
+    assert history.resolves(str(repo), "--output=/tmp/hemlock-history-test") is False
 
 
 def test_a_name_nobody_ever_pinned_says_so(repo):

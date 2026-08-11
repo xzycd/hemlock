@@ -223,7 +223,14 @@ def resolves(repo_root: str, ref: str) -> bool:
     """Whether git knows this ref. A `--since` nobody can resolve would
     otherwise read as a project with no history, which is the wrong answer
     told confidently."""
-    return bool(_git(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").strip())
+    return resolve_commit(repo_root, ref) is not None
+
+
+def resolve_commit(repo_root: str, ref: str) -> str | None:
+    """Resolve a user-provided revision without allowing option parsing."""
+    value = _git(repo_root, "rev-parse", "--verify", "--quiet", "--end-of-options",
+                 f"{ref}^{{commit}}")
+    return value.strip() or None
 
 
 def tags_in_window(repo_root: str, entered: str, left: str | None) -> list[str]:

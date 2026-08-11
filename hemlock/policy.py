@@ -14,6 +14,11 @@ from dataclasses import dataclass, field
 from datetime import date
 
 CONFIG_NAMES = [".hemlock.toml", "hemlock.toml"]
+FAIL_LEVELS = {"low", "medium", "high", "critical", "never"}
+
+
+class PolicyError(ValueError):
+    pass
 
 
 @dataclass
@@ -55,26 +60,50 @@ def load(root: str, explicit: str | None = None) -> Policy:
             if os.path.isfile(candidate):
                 path = candidate
                 break
+    if explicit and not os.path.isfile(explicit):
+        raise PolicyError(f"config file does not exist: {explicit}")
     if not path or not os.path.isfile(path):
         return Policy()
 
-    with open(path, "rb") as fh:
-        doc = tomllib.load(fh)
+    try:
+        with open(path, "rb") as fh:
+            doc = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise PolicyError(f"cannot read {path}: {exc}") from exc
+
+    fail_on = str(doc.get("fail_on", "high")).lower()
+    if fail_on not in FAIL_LEVELS:
+        raise PolicyError(f"{path}: fail_on must be one of {', '.join(sorted(FAIL_LEVELS))}")
+    try:
+        fresh_days = int(doc.get("fresh_days", 14))
+    except (TypeError, ValueError) as exc:
+        raise PolicyError(f"{path}: fresh_days must be a non-negative integer") from exc
+    if fresh_days < 0:
+        raise PolicyError(f"{path}: fresh_days must be a non-negative integer")
+
+    disabled = doc.get("disable", [])
+    if not isinstance(disabled, list) or not all(isinstance(rule, str) for rule in disabled):
+        raise PolicyError(f"{path}: disable must be a list of rule ids")
 
     policy = Policy(
-        fail_on=str(doc.get("fail_on", "high")).lower(),
-        fresh_days=int(doc.get("fresh_days", 14)),
-        disable={str(r).upper() for r in doc.get("disable", [])},
+        fail_on=fail_on,
+        fresh_days=fresh_days,
+        disable={rule.upper() for rule in disabled},
         path=path,
     )
 
-    for raw in doc.get("ignore", []):
+    ignores = doc.get("ignore", [])
+    if not isinstance(ignores, list) or not all(isinstance(raw, dict) for raw in ignores):
+        raise PolicyError(f"{path}: ignore must be an array of tables")
+    for raw in ignores:
         expires = raw.get("expires")
         if isinstance(expires, str):
             try:
                 expires = date.fromisoformat(expires)
-            except ValueError:
-                expires = None
+            except ValueError as exc:
+                raise PolicyError(f"{path}: invalid ignore expiry {expires!r}") from exc
+        elif expires is not None and not isinstance(expires, date):
+            raise PolicyError(f"{path}: ignore expiry must be an ISO date")
         ig = Ignore(
             rule=str(raw.get("rule", "*")).upper(),
             package=str(raw.get("package", "*")),

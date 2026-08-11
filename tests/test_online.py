@@ -5,13 +5,15 @@ the responses: which records get believed, how a repository URL is compared,
 and what happens when a lookup fails.
 """
 
+import gzip
 import json
 import os
 import urllib.request
 
 import pytest
 
-from hemlock.http import ABSENT
+from hemlock import http as http_mod
+from hemlock.http import ABSENT, Http
 from hemlock.intel import Osv
 from hemlock.model import Context, Package
 from hemlock.provenance import describe, npm_provenance, repo_slug
@@ -76,6 +78,75 @@ def test_separates_malware_from_advisories():
     assert pkg.meta["malware"][0]["id"] == "MAL-2025-46969"
     assert pkg.meta["malware"][0]["summary"] == "Malicious code in chalk (npm)"
     assert pkg.meta["advisories"] == ["GHSA-aaaa-bbbb-cccc"]
+
+
+@pytest.mark.parametrize("response", [
+    {"wrong": []},
+    {"results": []},
+    {"results": [None]},
+    {"results": [{"vulns": "not-a-list"}]},
+])
+def test_malformed_osv_batches_are_reported_not_trusted(response):
+    http = FakeHttp({BATCH: response})
+    pkg = Package("npm", "chalk", version="5.6.1")
+    Osv(http).enrich([pkg])
+    assert pkg.meta == {}
+    assert any("malformed" in failure or "expected" in failure for failure in http.failures)
+
+
+def test_http_rejects_an_oversized_body(monkeypatch):
+    monkeypatch.setattr(http_mod, "MAX_RESPONSE_BYTES", 8)
+
+    class Response:
+        headers = {}
+
+        def read(self, size):
+            return b"x" * 9
+
+    with pytest.raises(ValueError, match="exceeds"):
+        http_mod._body(Response())
+
+
+def test_http_limits_gzip_expansion(monkeypatch):
+    monkeypatch.setattr(http_mod, "MAX_RESPONSE_BYTES", 32)
+    compressed = gzip.compress(b"x" * 100)
+    assert len(compressed) < 32
+
+    class Response:
+        headers = {"Content-Encoding": "gzip"}
+
+        def read(self, size):
+            return compressed
+
+    with pytest.raises(ValueError, match="expanded response"):
+        http_mod._body(Response())
+
+
+def test_cache_writes_replace_a_symlink_instead_of_following_it(tmp_path):
+    http = Http(str(tmp_path / "cache"))
+    target = tmp_path / "unrelated"
+    target.write_text("keep")
+    os.symlink(target, http._path("key"))
+
+    http._write("key", {"safe": True})
+
+    assert target.read_text() == "keep"
+    assert not os.path.islink(http._path("key"))
+    assert http._read("key") == {"safe": True}
+
+
+@pytest.mark.parametrize("url", [
+    "file:///etc/passwd",
+    "http://registry.npmjs.org/chalk",
+    "https://user:secret@example.invalid/data",
+])
+def test_http_client_refuses_non_public_urls(tmp_path, monkeypatch, url):
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: pytest.fail("opened unsafe URL"))
+    http = Http(str(tmp_path / "cache"))
+    assert http.get(url) is None
+    assert http.post(url, {}) is None
+    assert all("refused" in failure for failure in http.failures)
+    assert all("secret" not in failure for failure in http.failures)
 
 
 def test_withdrawn_malware_reports_are_ignored():

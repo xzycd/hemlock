@@ -48,10 +48,25 @@ class Osv:
                 ]
             }
             response = self.http.post(OSV_BATCH, payload)
-            results = (response or {}).get("results") or []
+            if response is None:
+                continue
+            if not isinstance(response, dict) or not isinstance(response.get("results"), list):
+                self.http.failures.append("api.osv.dev/v1/querybatch: malformed response")
+                continue
+            results = response["results"]
+            malformed = len(results) != len(chunk)
 
             for coord, result in zip(chunk, results, strict=False):
-                ids = [v["id"] for v in (result.get("vulns") or [])]
+                if not isinstance(result, dict):
+                    malformed = True
+                    continue
+                vulns = result.get("vulns") or []
+                if not isinstance(vulns, list):
+                    malformed = True
+                    continue
+                ids = [v.get("id") for v in vulns if isinstance(v, dict) and isinstance(v.get("id"), str)]
+                if len(ids) != len(vulns):
+                    malformed = True
                 if not ids:
                     continue
                 malware, advisories = self._split(ids)
@@ -60,6 +75,12 @@ class Osv:
                         pkg.meta["malware"] = malware
                     if advisories:
                         pkg.meta["advisories"] = advisories
+
+            if malformed:
+                self.http.failures.append(
+                    f"api.osv.dev/v1/querybatch: malformed results "
+                    f"(expected {len(chunk)}, got {len(results)})"
+                )
 
             done += len(chunk)
             if progress:
