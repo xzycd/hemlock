@@ -99,6 +99,18 @@ git+https://github.com/example/thing.git#egg=thing
     assert all(p.kind == "package" for p in parsed if p.name != "requirements.txt")
 
 
+def test_requirements_accept_equals_options_and_keep_vcs_names(tmp_path):
+    path = write(tmp_path, "requirements.txt", """
+--extra-index-url=https://internal.example.invalid/simple
+git+https://github.com/example/my-package.git@v1.2.3
+""")
+    parsed = pypi.parse(path, str(tmp_path))
+    package = next(pkg for pkg in parsed if pkg.kind == "package")
+    manifest = next(pkg for pkg in parsed if pkg.kind == "manifest")
+    assert package.name == "my-package"
+    assert manifest.meta["extra_indexes"] == ["https://internal.example.invalid/simple"]
+
+
 def test_requirements_hashes_count_as_integrity(tmp_path):
     path = write(tmp_path, "requirements.txt",
                  "requests==2.31.0 --hash=sha256:aaaa\nflask==3.0.0\n")

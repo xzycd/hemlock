@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.8.0
+
+- HTTP responses and gzip expansion now have size limits. Cache writes are
+  atomic and cannot follow a destination symlink. The HTTP client accepts only
+  credential-free HTTPS endpoints.
+- `hemlock diff --since` rejects unknown or option-shaped git revisions
+  instead of treating the whole lockfile as new.
+- File-based source checks skip symlinks, OSV batch responses are validated,
+  and requirements parsing handles equals-style index options and hyphenated
+  VCS repository names.
+- Bad policy files now return a clear configuration error. Invalid failure
+  levels, negative freshness windows, malformed rule lists, and bad expiry
+  dates no longer pass silently.
+- Release and CI actions are pinned to full commits. Publishing is tag-only,
+  build tools are versioned, and Dependabot keeps those pins current. A CodeQL
+  workflow now checks pushes, pull requests, and the default branch each week.
+- Ruff's security rules now run in the normal lint job. Deliberate subprocess
+  and non-cryptographic random calls have narrow, documented exceptions.
+- Local AI notes now live under the ignored `.brain/` directory. The public
+  README is shorter and focused on installation, behavior, limits, and CI.
+
 ## 0.7.0
 
 Every command in the tool read the working tree, which answers a question

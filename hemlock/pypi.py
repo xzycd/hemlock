@@ -11,6 +11,7 @@ import json
 import os
 import re
 import tomllib
+import urllib.parse
 
 from .model import Package
 
@@ -22,6 +23,7 @@ _REQ = re.compile(
     r"(?:\[(?P<extras>[^\]]+)\])?"
     r"\s*(?P<spec>(?:[=<>!~^]=?|===)\s*[^;#\s]+)?"
 )
+_INDEX = re.compile(r"^(?:--index-url|--extra-index-url|-i)(?:\s+|=)(\S+)")
 
 
 def normalize(name: str) -> str:
@@ -65,9 +67,8 @@ def _parse_requirements(raw: str, rel: str) -> list[Package]:
     extra_indexes: list[str] = []
 
     for line in _logical_lines(raw):
-        if line.startswith(("--index-url", "--extra-index-url", "-i ")):
-            url = line.split(None, 1)[-1].strip()
-            extra_indexes.append(url)
+        if match := _INDEX.match(line):
+            extra_indexes.append(match.group(1))
             continue
         if line.startswith(("-r", "-c", "--requirement", "--constraint")):
             continue  # walked separately as its own manifest
@@ -125,8 +126,14 @@ def _logical_lines(raw: str):
 
 def _name_from_url(url: str) -> str:
     if "#egg=" in url:
-        return url.split("#egg=")[1].split("&")[0]
-    tail = url.rstrip("/").split("/")[-1]
+        return urllib.parse.unquote(url.split("#egg=")[1].split("&")[0])
+    tail = urllib.parse.urlsplit(url).path.rstrip("/").split("/")[-1]
+    # Preserve hyphenated repository names. Splitting `my-package.git` on the
+    # first hyphen used to report the dependency as just `my`.
+    if ".git@" in tail:
+        return urllib.parse.unquote(tail.split(".git@", 1)[0])
+    if tail.endswith(".git"):
+        return urllib.parse.unquote(tail[:-4])
     return re.split(r"[@.\-]", tail)[0] or tail
 
 

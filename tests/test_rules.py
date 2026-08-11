@@ -25,6 +25,16 @@ def pypi(name, **kw):
     return Package("pypi", name, **kw)
 
 
+def test_source_scan_does_not_follow_file_symlinks(tmp_path):
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("exec(code + suffix)\nexec(other + suffix)\n")
+    (package_dir / "linked.py").symlink_to(outside)
+    pkg = npm("example", source_dir=str(package_dir))
+    assert list(rules_mod.dynamic_eval(pkg, CTX)) == []
+
+
 @pytest.mark.parametrize(
     "a,b,expected",
     [

@@ -158,6 +158,14 @@ def test_since_requires_a_git_repository(tmp_path, capsys):
     assert "not inside a git repository" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("ref", ["no-such-ref", "--output=/tmp/hemlock-ref-test"])
+def test_since_ref_must_resolve_to_a_commit(repo, capsys, ref):
+    since = f"--since={ref}" if ref.startswith("-") else "--since"
+    argv = ["diff", since, "--path", str(repo)] if ref.startswith("-") else ["diff", since, ref, "--path", str(repo)]
+    assert cli.main(argv) == 2
+    assert "does not know the ref" in capsys.readouterr().err
+
+
 def test_diff_end_to_end_through_the_cli(repo, capsys):
     lock = repo / "package-lock.json"
     lock.write_text(json.dumps({

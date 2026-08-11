@@ -425,6 +425,11 @@ def _source_files(pkg: Package):
                 continue
             path = os.path.join(dirpath, fn)
             try:
+                # A package can contain a symlink to anywhere on the machine.
+                # Reading through it adds no evidence about the package bytes
+                # and can make a scan open unrelated local files.
+                if os.path.islink(path):
+                    continue
                 if os.path.getsize(path) > _MAX_BYTES:
                     continue
                 yield path, open(path, encoding="utf-8", errors="replace").read()

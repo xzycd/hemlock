@@ -511,6 +511,28 @@ def test_the_release_workflow_asks_for_attestations():
     assert "id-token: write" in text
 
 
+def test_release_only_publishes_tagged_commits():
+    path = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows", "release.yml")
+    text = open(path).read()
+    assert "workflow_dispatch" not in text
+    publish = text.split("\n  publish:", 1)[1].split("\n  github-release:", 1)[0]
+    assert "if: github.ref_type == 'tag'" in publish
+
+
+def test_workflow_actions_are_pinned_to_commits():
+    import re
+
+    root = os.path.join(os.path.dirname(__file__), "..", ".github", "workflows")
+    texts = [open(os.path.join(root, name)).read() for name in os.listdir(root)]
+    texts.append(cli.WORKFLOW)
+    for text in texts:
+        for line in text.splitlines():
+            if "uses:" not in line:
+                continue
+            ref = line.split("@", 1)[-1].split()[0]
+            assert re.fullmatch(r"[0-9a-f]{40}", ref), f"mutable action ref: {line.strip()}"
+
+
 def test_ci_steps_that_capture_a_report_do_not_gate_on_it():
     """`hemlock scan fixture --format sarif > file` failed the build for three
     weeks. The fixture is known-bad, so scanning it exits 1 by design, and a
@@ -552,3 +574,4 @@ def test_the_generated_workflow_installs_the_name_this_project_publishes(tmp_pat
     assert install, "the workflow never installs hemlock"
     for line in install:
         assert distribution in line, f"installs something other than {distribution}: {line.strip()}"
+        assert f"=={cli.__version__}" in line, f"generated workflow does not pin hemlock: {line.strip()}"

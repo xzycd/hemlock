@@ -72,7 +72,7 @@ def from_git(ref: str, path: str, repo_root: str) -> list[Package]:
     rel = os.path.relpath(os.path.abspath(path), repo_root)
     try:
         blob = subprocess.run(
-            ["git", "-C", repo_root, "show", f"{ref}:{rel}"],
+            ["git", "-C", repo_root, "show", "--end-of-options", f"{ref}:{rel}"],
             capture_output=True, check=True, timeout=30,
         ).stdout
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
@@ -94,6 +94,24 @@ def git_root(start: str) -> str | None:
         return out.stdout.strip() or None
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
         return None
+
+
+def resolve_ref(ref: str, repo_root: str) -> str | None:
+    """Return the commit id for a revision, or None when it is not a commit.
+
+    Resolving first keeps a misspelled `--since` from making every dependency
+    look newly added. `--end-of-options` also stops a revision beginning with
+    a dash from becoming a git option.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", repo_root, "rev-parse", "--verify", "--quiet",
+             "--end-of-options", f"{ref}^{{commit}}"],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
 
 
 def compare(base: list[Package], head: list[Package]) -> tuple[list[Change], list[Package], int]:

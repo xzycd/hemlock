@@ -17,6 +17,20 @@ SEVERITY_ORDER = ["low", "medium", "high", "critical"]
 BANNER = "hemlock: supply-chain scanner for npm and PyPI. Poison hemlock looks like parsley."
 
 
+def _non_negative(value: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be zero or greater")
+    return number
+
+
+def _positive(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="hemlock", description=BANNER)
     p.add_argument("--version", action="version", version=f"hemlock {__version__}")
@@ -49,7 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("path", nargs="?", default=".", help="project directory (default: .)")
     h.add_argument("--package", metavar="NAME",
                    help="follow one package through the history instead of hunting for exposure")
-    h.add_argument("--limit", type=int, default=history_mod.DEFAULT_LIMIT, metavar="N",
+    h.add_argument("--limit", type=_positive, default=history_mod.DEFAULT_LIMIT, metavar="N",
                    help=f"manifest commits to read, newest first (default: {history_mod.DEFAULT_LIMIT})")
     h.add_argument("--since", metavar="REF", help="only history after this git ref")
     h.add_argument("--online", action="store_true", help="check every version ever pinned against osv.dev")
@@ -92,7 +106,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _shared(sp) -> None:
     sp.add_argument("--online", action="store_true", help="add registry, provenance and OSV checks")
-    sp.add_argument("--fresh-days", type=int, metavar="N", help="how new a release counts as fresh (default 14)")
+    sp.add_argument("--fresh-days", type=_non_negative, metavar="N",
+                    help="how new a release counts as fresh (default 14)")
     sp.add_argument("--fail-on", choices=SEVERITY_ORDER + ["never"], help="exit non-zero at this severity")
     sp.add_argument("--format", choices=["terminal", "markdown", "json", "sarif"], default="terminal")
     sp.add_argument("--config", metavar="FILE", help="path to .hemlock.toml")
@@ -129,16 +144,20 @@ def main(argv: list[str] | None = None) -> int:
         print(fmt.rule_table(ink, online_only=args.online))
         return 0
 
-    return {
-        "scan": _scan,
-        "check": _check,
-        "update": _update,
-        "diff": _diff,
-        "history": _history,
-        "why": _why,
-        "baseline": _baseline,
-        "init": _init,
-    }[args.command](args, ink)
+    try:
+        return {
+            "scan": _scan,
+            "check": _check,
+            "update": _update,
+            "diff": _diff,
+            "history": _history,
+            "why": _why,
+            "baseline": _baseline,
+            "init": _init,
+        }[args.command](args, ink)
+    except policy_mod.PolicyError as exc:
+        print(f"hemlock: {exc}", file=sys.stderr)
+        return 2
 
 
 # --------------------------------------------------------------------------
@@ -351,13 +370,17 @@ def _diff(args, ink: fmt.Ink) -> int:
         if not repo:
             print(f"hemlock: {args.path} is not inside a git repository", file=sys.stderr)
             return 2
+        resolved = diff_mod.resolve_ref(args.since, repo)
+        if not resolved:
+            print(f"hemlock: git does not know the ref {args.since!r}", file=sys.stderr)
+            return 2
         _, head = scan.collect(root)
         if not head:
             print(f"\n  no npm or Python manifests under {args.path}\n", file=sys.stderr)
             return 0
         base = []
         for rel in sorted({p.origin for p in head}):
-            base.extend(diff_mod.from_git(args.since, os.path.join(root, rel), repo))
+            base.extend(diff_mod.from_git(resolved, os.path.join(root, rel), repo))
         labels = (args.since, "working tree")
 
     elif len(args.manifests) == 2:
@@ -427,13 +450,13 @@ jobs:
   supply-chain:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - run: pip install hemlock-scan
+      - run: pip install hemlock-scan==HEMLOCK_VERSION
 
       # On a pull request, judge what the branch adds rather than the whole
       # tree. Everything already in the lockfile was somebody else's decision.
@@ -473,13 +496,13 @@ jobs:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - run: pip install hemlock-scan
+      - run: pip install hemlock-scan==HEMLOCK_VERSION
       - run: hemlock history . --online --fail-on critical
 """
 
@@ -504,9 +527,12 @@ def _history(args, ink: fmt.Ink) -> int:
         return 2
     # An unresolvable ref would quietly read as a project with no history, and
     # "nothing was ever pinned here" is not a thing to say by accident.
-    if args.since and not history_mod.resolves(repo, args.since):
-        print(f"hemlock: git does not know the ref {args.since!r}", file=sys.stderr)
-        return 2
+    since = ""
+    if args.since:
+        since = history_mod.resolve_commit(repo, args.since) or ""
+        if not since:
+            print(f"hemlock: git does not know the ref {args.since!r}", file=sys.stderr)
+            return 2
 
     _launch(args)
     pol, fail_on = _policy(args, root)
@@ -515,7 +541,7 @@ def _history(args, ink: fmt.Ink) -> int:
         if ticker:
             ticker.start()
         report = history_mod.run(root, online=args.online, package=args.package or "",
-                                 limit=args.limit, since=args.since or "",
+                                 limit=args.limit, since=since,
                                  progress=ticker.update if ticker else None)
     finally:
         if ticker:
@@ -601,7 +627,7 @@ def _init(args, ink: fmt.Ink) -> int:
     else:
         os.makedirs(os.path.dirname(workflow), exist_ok=True)
         with open(workflow, "w", encoding="utf-8") as fh:
-            fh.write(WORKFLOW)
+            fh.write(WORKFLOW.replace("HEMLOCK_VERSION", __version__))
         written.append(".github/workflows/hemlock.yml")
 
     print("")

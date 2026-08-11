@@ -12,7 +12,7 @@ import pytest
 from hemlock import cli, scan
 from hemlock import report as fmt
 from hemlock.model import RULES, Finding, Package
-from hemlock.policy import Policy, load
+from hemlock.policy import Policy, PolicyError, load
 from hemlock.score import score_package
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "..", "examples", "compromised-app")
@@ -210,6 +210,25 @@ def test_missing_config_is_fine(tmp_path):
     assert load(str(tmp_path)).fail_on == "high"
 
 
+@pytest.mark.parametrize("text", [
+    "fail_on = 'urgent'\n",
+    "fresh_days = -1\n",
+    "disable = 'HEM201'\n",
+    "[[ignore]]\nexpires = 'tomorrow'\n",
+    "not valid toml =\n",
+])
+def test_invalid_policy_is_rejected_with_a_clear_error(tmp_path, text):
+    (tmp_path / ".hemlock.toml").write_text(text)
+    with pytest.raises(PolicyError):
+        load(str(tmp_path))
+
+
+def test_cli_reports_a_bad_policy_without_a_traceback(tmp_path, capsys):
+    (tmp_path / ".hemlock.toml").write_text("fail_on = 'urgent'\n")
+    assert cli.main(["scan", str(tmp_path), "--color", "never"]) == 2
+    assert "fail_on must be one of" in capsys.readouterr().err
+
+
 # -- output and exit codes -------------------------------------------------
 
 
@@ -265,7 +284,7 @@ def test_rule_counts_match_the_readme():
     readme = open(os.path.join(os.path.dirname(__file__), "..", "README.md")).read()
     offline = [r for r in RULES.values() if not r.online]
     assert (len(RULES), len(offline)) == (26, 15)
-    assert "Twenty-six rules" in readme and "Fifteen need no network" in readme
+    assert "The 26 rules" in readme and "Fifteen rules run offline" in readme
 
 
 def test_only_reported_facts_are_certain():
