@@ -224,8 +224,8 @@ changelog, then create an annotated tag after the release commit reaches the
 default branch:
 
 ```bash
-git tag -a v0.8.0 -m "hemlock v0.8.0"
-git push origin v0.8.0
+git tag -s v0.8.1 -m "hemlock v0.8.1"
+git push origin v0.8.1
 ```
 
 The workflow runs lint, tests, and the known-bad fixture before it builds and

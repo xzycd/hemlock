@@ -17,6 +17,7 @@ import math
 import os
 import re
 import unicodedata
+import urllib.parse
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 
@@ -597,7 +598,21 @@ def insecure_transport(pkg: Package, ctx: Context):
         yield pkg.resolved
 
 
-_OFF_REGISTRY = re.compile(r"^(git\+|git:|file:|link:|https?://(?!registry\.))")
+_OFF_REGISTRY = re.compile(r"^(git\+|git:|file:|link:|https?://)")
+_REGISTRY_HOSTS = frozenset({"registry.npmjs.org", "files.pythonhosted.org"})
+
+
+def _is_registry_url(src: str) -> bool:
+    try:
+        parsed = urllib.parse.urlsplit(src)
+        return (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname in _REGISTRY_HOSTS
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        return False
 
 
 def _off_registry(pkg: Package) -> str:
@@ -607,7 +622,7 @@ def _off_registry(pkg: Package) -> str:
     has to stay quiet about a name the registry was never going to hold.
     """
     src = str(pkg.resolved or pkg.spec or "")
-    if "registry.npmjs.org" in src or "files.pythonhosted.org" in src:
+    if _is_registry_url(src):
         return ""
     return src if (pkg.meta.get("vcs") or _OFF_REGISTRY.match(src)) else ""
 
