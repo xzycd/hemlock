@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.1
+
+- Registry tarball URLs are now recognized by their parsed hostname. A URL
+  that merely contains an official registry name is correctly reported as an
+  outside source.
+
 ## 0.8.0
 
 - HTTP responses and gzip expansion now have size limits. Cache writes are

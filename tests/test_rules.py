@@ -10,6 +10,7 @@ from hemlock.rules import (
     homoglyph_name,
     near_miss,
     nearest,
+    off_registry_source,
     scope_drop,
     wearing_affix,
 )
@@ -57,6 +58,30 @@ def test_edit_distance_bails_out_early():
 
 def fires(rule, pkg):
     return list(rule(pkg, CTX))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://registry.npmjs.org/chalk/-/chalk-5.6.1.tgz",
+        "https://files.pythonhosted.org/packages/example.whl",
+    ],
+)
+def test_off_registry_accepts_only_official_registry_hosts(url):
+    assert not fires(off_registry_source, npm("example", resolved=url))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.test/registry.npmjs.org/package.tgz",
+        "https://registry.npmjs.org.evil.test/package.tgz",
+        "https://registry.npmjs.org@evil.test/package.tgz",
+        "https://evil.test/?next=files.pythonhosted.org",
+    ],
+)
+def test_off_registry_rejects_registry_names_outside_hostname(url):
+    assert fires(off_registry_source, npm("example", resolved=url)) == [url]
 
 
 class TestNearMiss:
