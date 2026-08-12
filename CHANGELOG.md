@@ -24,8 +24,8 @@
   workflow now checks pushes, pull requests, and the default branch each week.
 - Ruff's security rules now run in the normal lint job. Deliberate subprocess
   and non-cryptographic random calls have narrow, documented exceptions.
-- Local AI notes now live under the ignored `.brain/` directory. The public
-  README is shorter and focused on installation, behavior, limits, and CI.
+- Private working notes stay out of Git and release archives. The public README
+  is shorter and focused on installation, behavior, limits, and CI.
 
 ## 0.7.0
 
