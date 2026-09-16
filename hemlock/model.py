@@ -20,6 +20,7 @@ CATEGORIES = {
     "registry": "Registry trust",
     "provenance": "Build provenance",
     "intel": "Public intelligence",
+    "campaign": "Correlated activity",
 }
 
 SEVERITY_BANDS = [
@@ -112,6 +113,11 @@ class Context:
     packages: list[Package] = field(default_factory=list)
     fresh_days: int = 14
     registry = None  # hemlock.registry.Registry, set when online
+    # Campaigns found across the whole package set, computed once before the
+    # rules run. The HEM8xx rules read this rather than recomputing it: a
+    # correlation is a property of the set, and asking each package to
+    # rediscover the set it belongs in would be both slow and wrong.
+    campaigns: list = field(default_factory=list)
 
     def dependents(self, pkg: Package) -> int:
         return sum(1 for p in self.packages if p.name != pkg.name)
