@@ -198,6 +198,6 @@ def _attach_installed(pkgs: list[Package], project_dir: str) -> None:
         except (OSError, json.JSONDecodeError):
             continue
         pkg.scripts = {k: str(v) for k, v in (doc.get("scripts") or {}).items()}
-        for key in ("repository", "homepage", "bin"):
+        for key in ("repository", "homepage", "bin", "main"):
             if doc.get(key):
                 pkg.meta[key] = doc[key]

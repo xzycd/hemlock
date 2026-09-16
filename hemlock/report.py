@@ -73,6 +73,13 @@ class Removal:
 HEADLINES = [
     ("HEM701", "{n} package is on a public malware list.",
                "{n} packages are on a public malware list."),
+    # Above everything except a malware record. A shared install payload is
+    # the one finding here that is about more than the package it is printed
+    # on, and the headline is the only line guaranteed to be read.
+    ("HEM801", "{n} package ships an install payload that another package here also ships.",
+               "{n} packages ship the same install payload as each other."),
+    ("HEM802", "{n} package reaches an endpoint that another package here also reaches.",
+               "{n} packages reach the same unexplained endpoint at install time."),
     ("HEM204", "{n} package reads credentials from an install script.",
                "{n} packages read credentials from an install script."),
     ("HEM602", "{n} package was built somewhere other than the repository it points you at.",
@@ -81,6 +88,8 @@ HEADLINES = [
                "{n} packages fetch and run code at install time."),
     ("HEM203", "{n} package decodes a hidden payload at install time.",
                "{n} packages decode a hidden payload at install time."),
+    ("HEM803", "{n} package was published by an account that is new to several packages here.",
+               "{n} packages were published by one account that is new to all of them."),
     ("HEM502", "{n} package was published by an account that had not published it before.",
                "{n} packages were published by accounts that had not published them before."),
     ("HEM103", "{n} package name carries a look-alike character.",
@@ -132,6 +141,11 @@ def terminal(report: Report, ink: Ink, show_all: bool = False, fail_on: str = ""
     if line := headline(report):
         out.append("  " + ink(line, "bold"))
         out.append("")
+
+    # Above the list, not in it. A campaign reframes every package under it,
+    # and a reader who meets the packages first has already decided they are
+    # four unrelated mediums by the time the relationship is mentioned.
+    out.extend(_campaigns_block(report, ink, g, w))
 
     shown = report.verdicts if show_all else report.flagged
     if not shown:
@@ -275,6 +289,178 @@ def _rule_line(label: str, subject: str, meta: str, ink: Ink, g: dict, w: int) -
     fill = max(2, w - len(left) - len(meta) - 6)
     return (f"  {ink(label, 'accent', 'bold')}  {ink(subject, 'dim')} "
             f"{ink(g['line'] * fill, 'dim')}  {ink(meta, 'dim')}")
+
+
+# --------------------------------------------------------------------------
+# correlated activity
+# --------------------------------------------------------------------------
+
+# Beyond this the matrix is wider than it is useful, and the legend below it
+# carries the detail anyway.
+MAX_LINK_COLUMNS = 6
+MAX_CAMPAIGN_ROWS = 12
+
+
+def live_campaigns(report) -> list:
+    """Campaigns that still have something to say after filtering.
+
+    A baseline strips accepted findings off the verdicts and rescores what is
+    left, and a suppression never lets them through at all. Neither of those
+    touches the campaign list, so without this a project that has explicitly
+    accepted a campaign still gets the whole block printed at it -- and, once
+    every member has been accepted, gets it printed with nothing underneath.
+    Accepted means accepted.
+    """
+    campaigns = getattr(report, "campaigns", None) or []
+    if not campaigns:
+        return []
+    alive = {f.rule.id for v in report.verdicts for f in v.findings if f.rule.category == "campaign"}
+    if not alive:
+        return []
+    speaking = set()
+    for v in report.verdicts:
+        for f in v.findings:
+            if f.rule.category == "campaign":
+                speaking.add(v.package.coord)
+    return [c for c in campaigns if any(m.coord in speaking for m in c.members)]
+
+
+def _campaigns_block(report, ink: Ink, g: dict, w: int) -> list[str]:
+    """The section that exists because the per-package list cannot say this.
+
+    A campaign is one fact about several packages, and the per-package view
+    necessarily prints it once per package, which is the same shape as forty
+    unrelated findings and reads like noise. Stating it once, above the list,
+    is the whole point of having found it.
+    """
+    campaigns = live_campaigns(report)
+    if not campaigns:
+        return []
+
+    total = sum(len(c.members) for c in campaigns)
+    meta = f"{plural(len(campaigns), 'campaign')} {g['sep']} {plural(total, 'package')}"
+    out = [_rule_line("correlated", "packages that arrived together", meta, ink, g, w), ""]
+    for camp in campaigns:
+        out += _one_campaign(camp, report, ink, g, w)
+    return out
+
+
+def _one_campaign(camp, report, ink: Ink, g: dict, w: int) -> list[str]:
+    scores = {v.package.coord: v for v in report.verdicts}
+    tone = _campaign_tone(camp, scores)
+    bar = f"  {rail(ink, tone)} "
+
+    links = camp.links[:MAX_LINK_COLUMNS]
+    members = sorted(camp.members, key=lambda p: (-_member_score(p, scores), p.name))
+    hidden = max(0, len(members) - MAX_CAMPAIGN_ROWS)
+    members = members[:MAX_CAMPAIGN_ROWS]
+
+    head = f"{ink(camp.label, 'accent', 'bold')}  {_campaign_title(camp)}"
+    out = [f"  {rail(ink, tone)} {head}".ljust(0), f"{bar}"]
+
+    # The matrix. Columns are numbered rather than named because a payload
+    # digest and a hostname are both too wide to head a column with, and the
+    # legend underneath has room to say them properly.
+    label_w = max((len(_member_label(m)) for m in members), default=0)
+    label_w = min(label_w, max(20, w - 30))
+    header = " " * (label_w + 2) + " ".join(f"{i:>2}" for i in range(1, len(links) + 1))
+    out.append(f"{bar}  {ink(header, 'dim')}")
+
+    from .campaign import key_of
+    for m in members:
+        key = key_of(m)
+        cells = []
+        for shared in links:
+            has = key in shared.members
+            cells.append(ink(f"{g['full']:>2}" if has else f"{g['trace']:>2}",
+                             tone if has else "dim"))
+        name = _member_label(m)[:label_w].ljust(label_w)
+        sev = _member_severity(m, scores)
+        out.append(f"{bar}  {ink(name, sev if sev != 'clean' else 'dim')}  " + " ".join(cells))
+    if hidden:
+        out.append(f"{bar}  {ink(f'and {hidden} more', 'dim')}")
+
+    out.append(f"{bar}")
+    for i, shared in enumerate(links, start=1):
+        title = shared.display if shared.kind == "payload" else f"{shared.kind} {shared.display}"
+        out.append(f"{bar}  {ink(f'{i:>2}', 'accent')}  {ink(title, 'bold')}")
+        for chunk in textwrap.wrap(shared.detail, w - INDENT - 12):
+            out.append(f"{bar}      {ink(chunk, 'dim')}")
+    if camp.burst:
+        out.append(f"{bar}   {g['sep']}  {ink(camp.burst, 'dim')}")
+
+    out.append(f"{bar}")
+    for chunk in textwrap.wrap(_campaign_note(camp, scores), w - INDENT - 6):
+        out.append(f"{bar}  {ink(chunk, 'dim')}")
+    out.append("")
+    return out
+
+
+def _member_label(pkg) -> str:
+    return f"{pkg.name} {pkg.version}" if pkg.version else pkg.name
+
+
+def _member_score(pkg, scores) -> int:
+    v = scores.get(pkg.coord)
+    return v.score if v else 0
+
+
+def _member_severity(pkg, scores) -> str:
+    v = scores.get(pkg.coord)
+    return v.severity if v else "clean"
+
+
+def _campaign_tone(camp, scores) -> str:
+    worst = "low"
+    for m in camp.members:
+        sev = _member_severity(m, scores)
+        if sev in SEVERITY_RANK and SEVERITY_RANK.index(sev) > SEVERITY_RANK.index(worst):
+            worst = sev
+    return worst
+
+
+# Strongest evidence first, so the title leads with the payload rather than
+# with whichever kind happens to sort first.
+CAMPAIGN_KINDS = [("payload", "one install payload"), ("endpoint", "one endpoint"),
+                  ("publisher", "one newly-arrived account")]
+
+
+def _campaign_title(camp) -> str:
+    kinds = set(camp.kinds)
+    shared = ", ".join(text for kind, text in CAMPAIGN_KINDS if kind in kinds)
+    return f"{plural(len(camp.members), 'package')} sharing {shared}"
+
+
+def _campaign_note(camp, scores) -> str:
+    """The sentence that says why this section exists at all.
+
+    Naming what these would have scored apart is not a flourish. It is the
+    difference the correlation made, and a reader who cannot see that number
+    has no way to judge whether it was worth making.
+    """
+    if not camp.behavioral:
+        return ("This is a question, not a compromise: one account is new to all of these at "
+                "once. Ask whether it belongs to them before the next install.")
+
+    alone = [s for s in (_alone_severity(m, scores) for m in camp.members) if s]
+    quiet = [s for s in alone if s in ("clean", "low", "medium")]
+    if len(quiet) < 2:
+        return "One finding in several places, not several findings. Remove them together."
+
+    worst = max(quiet, key=lambda s: ["clean", "low", "medium"].index(s))
+    named = {"clean": "nothing at all", "low": "a low finding", "medium": "a medium finding"}[worst]
+    return (f"Read one at a time, {len(quiet)} of these come back as {named} and no build stops. "
+            f"They are one finding in several places. Remove them together.")
+
+
+def _alone_severity(pkg, scores) -> str | None:
+    """What this package would have scored without the campaign findings."""
+    v = scores.get(pkg.coord)
+    if v is None:
+        return None
+    from .score import score_package
+    kept = [f for f in v.findings if f.rule.category != "campaign"]
+    return score_package(pkg, kept).severity
 
 
 def _all_clear(report: Report, ink: Ink, w: int) -> list[str]:
@@ -512,6 +698,11 @@ def terminal_diff(report, ink: Ink) -> str:
     if line := headline(report):
         out.append("  " + ink(line, "bold"))
         out.append("")
+
+    # A change that adds several members of one campaign is the case this
+    # section exists for, so the diff view gets it for the same reason the
+    # scan view does.
+    out.extend(_campaigns_block(report, ink, g, w))
 
     for v in report.flagged:
         out.extend(_verdict_block(v, ink, g, w, uni, change=by_name.get(v.package.name),
@@ -860,6 +1051,7 @@ MD_ROWS = 20
 def as_markdown(report: Report) -> str:
     out = [MARKER, "## hemlock", ""]
     out += _md_callout(report)
+    out += _md_campaigns(report)
     if report.flagged:
         out += _md_table(report.flagged)
         out += _md_details(report.flagged)
@@ -872,6 +1064,7 @@ def as_markdown_diff(report) -> str:
     out = [MARKER, "## hemlock", "",
            f"`{report.base_label}` → `{report.head_label}`", ""]
     out += _md_callout(report)
+    out += _md_campaigns(report)
     if report.flagged:
         out += _md_table(report.flagged, changes)
         out += _md_details(report.flagged)
@@ -896,6 +1089,27 @@ def _md_callout(report) -> list[str]:
     counts = report.counts()
     level = "WARNING" if counts["critical"] or counts["high"] else "NOTE"
     return [f"> [!{level}]", f"> {line}", ""]
+
+
+def _md_campaigns(report) -> list[str]:
+    """Campaigns go above the table for the same reason they go above the
+    terminal list: the table is one row per package, and this is the fact that
+    the rows are not independent of each other."""
+    campaigns = live_campaigns(report)
+    if not campaigns:
+        return []
+
+    out: list[str] = []
+    for camp in campaigns:
+        names = ", ".join(f"`{_md_escape(m.coord)}`" for m in camp.members)
+        out += [f"### {camp.label} · {_md_escape(_campaign_title(camp))}", "", names, ""]
+        for shared in camp.links:
+            title = shared.display if shared.kind == "payload" else f"{shared.kind} {shared.display}"
+            out.append(f"- **{_md_escape(title)}** — {_md_escape(shared.detail)}")
+        if camp.burst:
+            out.append(f"- {_md_escape(camp.burst)}")
+        out.append("")
+    return out
 
 
 def _md_table(flagged, changes: dict | None = None) -> list[str]:
@@ -979,6 +1193,7 @@ def as_json(report: Report) -> str:
         "headline": headline(report),
         "malware": [v.package.coord for v in report.malware],
         "summary": {"scanned": len(report.packages), "suppressed": report.suppressed, **report.counts()},
+        "campaigns": [_campaign_json(c) for c in live_campaigns(report)],
         "warnings": report.warnings,
         "results": [_result(v) for v in report.flagged],
     }
@@ -1002,6 +1217,7 @@ def as_json_diff(report) -> str:
             "unchanged": report.unchanged,
             **report.counts(),
         },
+        "campaigns": [_campaign_json(c) for c in live_campaigns(report)],
         "removed": [{"ecosystem": p.ecosystem, "name": p.name} for p in report.removed],
         "warnings": report.warnings,
         "results": [
@@ -1012,6 +1228,27 @@ def as_json_diff(report) -> str:
         ],
     }
     return json.dumps(payload, indent=2)
+
+
+def _campaign_json(camp) -> dict:
+    """A campaign as its own object rather than only as findings on packages.
+
+    The per-package findings carry the same facts, but reassembling the group
+    from them downstream means re-deriving the relationship this already
+    worked out. Something consuming the JSON to open one ticket per incident
+    wants the incident.
+    """
+    return {
+        "id": camp.label,
+        "members": [{"ecosystem": p.ecosystem, "name": p.name, "version": p.version}
+                    for p in camp.members],
+        "links": [
+            {"kind": ln.kind, "value": ln.key, "detail": ln.detail,
+             "members": list(ln.members)}
+            for ln in camp.links
+        ],
+        "burst": camp.burst or None,
+    }
 
 
 def _result(v) -> dict:

@@ -21,6 +21,7 @@ import urllib.parse
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 
+from .campaign import key_of
 from .data import AFFIXES, CREDENTIAL_PATHS, HOMOGLYPHS, POPULAR
 from .model import RULES, Context, Package, rule
 from .provenance import describe
@@ -1018,6 +1019,152 @@ def known_advisory(pkg: Package, ctx: Context):
 
 
 # --------------------------------------------------------------------------
+# correlated activity
+#
+# These three are the only rules that are not about a package. They are about
+# the relationship between packages, which `campaign.py` works out once for
+# the whole set before any rule runs; what is left here is the reporting.
+#
+# Putting them in the registry rather than in a separate reporting path is the
+# point. A correlated finding gets a weight, an id, an explanation, a remedy,
+# a SARIF entry and a suppression the same way HEM101 does, and because
+# "campaign" is a category, the existing rule that agreement across categories
+# counts for more does the escalation with no new arithmetic. Six packages
+# that each looked like a medium on their own are each a critical the moment
+# it is clear they are one push.
+# --------------------------------------------------------------------------
+
+
+def _campaign_of(pkg: Package, ctx: Context):
+    from .campaign import for_package
+    return for_package(getattr(ctx, "campaigns", None) or [], pkg)
+
+
+def _others(camp, pkg: Package, limit: int = 4) -> str:
+    names = sorted({m.name for m in camp.members if m.name != pkg.name})
+    if not names:
+        return ""
+    shown = ", ".join(names[:limit])
+    return shown + (f" and {len(names) - limit} more" if len(names) > limit else "")
+
+
+@rule(
+    "HEM801",
+    title="Shares an install payload with other packages",
+    category="campaign",
+    weight=55,
+    explain="""
+    The code this package would execute during installation also appears,
+    structurally unchanged, in at least one other package in this tree. The
+    comparison is made after identifiers, string contents and numbers have
+    been stripped out, so renaming every variable, re-minifying the file or
+    changing the address it reports to does not break the match.
+
+    One package with a hard-to-read install script is a question. The same
+    install script in several packages at once is not a coincidence and is
+    not a shared library either, because a shared library is a dependency
+    rather than a copy. It is the shape of a token compromise: whoever holds
+    the publishing credentials writes the same payload into everything those
+    credentials can reach. Shai-Hulud did this to hundreds of npm packages
+    with one `bundle.js`, and every one of those packages, read on its own,
+    was an unremarkable postinstall.
+
+    Packages that share an owner are not compared against each other, so a
+    monorepo shipping one helper across its own scope does not appear here.
+
+    Treat this as one incident rather than as several findings. The packages
+    named below arrived together and should be removed together.
+    """,
+)
+def campaign_payload(pkg: Package, ctx: Context):
+    camp = _campaign_of(pkg, ctx)
+    if not camp:
+        return
+    for link in camp.links_of("payload"):
+        if key_of(pkg) not in link.members:
+            continue
+        yield f"{link.display}: {link.detail}"
+        if others := _others(camp, pkg):
+            yield f"also in {others}"
+        if camp.burst:
+            yield camp.burst
+
+
+@rule(
+    "HEM802",
+    title="Shares an install-time endpoint with others",
+    category="campaign",
+    weight=45,
+    explain="""
+    Several packages in this tree contact the same address from code that
+    runs at install time, and it is not an address packages ordinarily
+    contact. Registries, language runtimes, the large CDNs and the package's
+    own declared repository are all excluded before anything is compared.
+
+    Exfiltration needs somewhere to send to, and that somewhere is the one
+    part of a campaign the attacker cannot vary freely: a payload can be
+    reshaped per package, but the collection point is shared by construction.
+    The npm worm of 2025 sent everything it harvested to a single webhook
+    endpoint, which is why the endpoint is what defenders published first.
+
+    This finding names the host. Look it up before doing anything else. If it
+    resolves to something you do not recognize and cannot attribute to the
+    packages involved, treat the credentials reachable from any machine that
+    ran these installs as already gone.
+    """,
+)
+def campaign_endpoint(pkg: Package, ctx: Context):
+    camp = _campaign_of(pkg, ctx)
+    if not camp:
+        return
+    for link in camp.links_of("endpoint"):
+        if key_of(pkg) not in link.members:
+            continue
+        yield f"{link.display}: {link.detail}"
+        if others := _others(camp, pkg):
+            yield f"also reached by {others}"
+
+
+@rule(
+    "HEM803",
+    title="One new account behind several packages",
+    category="campaign",
+    weight=35,
+    online=True,
+    explain="""
+    One account published the version in use here and the versions in use for
+    other packages in this tree, and for every one of them it is an account
+    that had not published that package before.
+
+    Each of those on its own is HEM502, which is often innocent: maintainers
+    change, projects get handed on, release bots get introduced. Several at
+    once is a different claim. A person joining four unrelated projects in the
+    same window is unusual; a stolen token being spent across everything it
+    can reach looks exactly like this, and it is the first thing visible from
+    outside before any payload is found.
+
+    Packages under one owner count once, so an organization adding a release
+    bot across its own scope does not raise this.
+
+    Check whether the account appears in the repositories of the projects it
+    has just published. One answer covers all of them.
+    """,
+)
+def campaign_publisher(pkg: Package, ctx: Context):
+    camp = _campaign_of(pkg, ctx)
+    if not camp:
+        return
+    for link in camp.links_of("publisher"):
+        if key_of(pkg) not in link.members:
+            continue
+        yield f'"{link.display}" {link.detail}'
+        if others := _others(camp, pkg):
+            yield f"also published {others}"
+        if camp.burst:
+            yield camp.burst
+
+
+# --------------------------------------------------------------------------
 # what to do about it
 # --------------------------------------------------------------------------
 
@@ -1025,6 +1172,8 @@ def known_advisory(pkg: Package, ctx: Context):
 # than spread through the decorators so the set can be read at once: a report
 # where every third entry says "investigate further" is a report nobody acts
 # on, and that only shows up when you see them side by side.
+
+
 REMEDIES = {
     "HEM101": "Compare the name against what you meant to install, then find out which dependency asked for it.",
     "HEM102": "Confirm the package against the project's own documentation, not against registry search results.",
@@ -1053,6 +1202,9 @@ REMEDIES = {
     "HEM602": "Confirm the maintainers control the repository the attestation names.",
     "HEM701": "Remove it, then rotate every credential the install could reach.",
     "HEM702": "Upgrade past the affected range. Every id above resolves at osv.dev.",
+    "HEM801": "Remove every package named here in one go, then rotate anything an install could reach.",
+    "HEM802": "Resolve the host. If you cannot account for it, treat the credentials as gone and rotate now.",
+    "HEM803": "Ask whether that account belongs to these projects. One answer settles every package it touched.",
 }
 
 for _rule_id, _remedy in REMEDIES.items():
