@@ -112,6 +112,8 @@ def _shared(sp) -> None:
     sp.add_argument("--format", choices=["terminal", "markdown", "json", "sarif"], default="terminal")
     sp.add_argument("--config", metavar="FILE", help="path to .hemlock.toml")
     sp.add_argument("--color", choices=["auto", "always", "never"], default="auto")
+    sp.add_argument("--no-correlate", action="store_true",
+                    help="judge every package on its own, without comparing them to each other")
     sp.add_argument("--ignore-baseline", action="store_true",
                     help="report accepted findings too, instead of only new ones")
     sp.add_argument("--no-logo", action="store_true", help="skip the wordmark")
@@ -193,6 +195,8 @@ def _policy(args, root: str):
     # config for its failing threshold and nothing else.
     if getattr(args, "fresh_days", None) is not None:
         pol.fresh_days = args.fresh_days
+    if getattr(args, "no_correlate", False):
+        pol.correlate = False
     return pol, (args.fail_on or pol.fail_on)
 
 
@@ -652,6 +656,10 @@ fail_on = "high"
 
 # How new a release has to be before HEM501 calls it fresh.
 fresh_days = 14
+
+# Compare packages against each other, not only against the rules. Off, the
+# HEM8xx correlation rules have nothing to read and stay quiet.
+correlate = true
 
 # Turn rules off entirely. Prefer an [[ignore]] block with a reason.
 disable = []
