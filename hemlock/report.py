@@ -1040,7 +1040,7 @@ def as_json_history(report) -> str:
 # markdown, for a pull request comment
 # --------------------------------------------------------------------------
 
-DOT = {"critical": "\U0001f534", "high": "\U0001f7e0", "medium": "\U0001f7e1", "low": "⚪", "clean": "\U0001f7e2"}
+DOT = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "⚪", "clean": "🟢"}
 # Lets a bot find and replace its own comment instead of adding a new one to
 # every push.
 MARKER = "<!-- hemlock -->"
