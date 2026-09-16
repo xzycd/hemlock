@@ -8,6 +8,11 @@ fail_on = "high"
 # How new a release has to be before HEM501 calls it fresh.
 fresh_days = 14
 
+# Compare packages against each other as well as judging them one at a time.
+# This is what finds one payload, one endpoint or one new account spread
+# across several packages. Off, the HEM8xx rules stay quiet.
+correlate = true
+
 # Turn rules off entirely. Prefer an [[ignore]] block with a reason --
 # this list applies everywhere and leaves no record of why.
 disable = []
