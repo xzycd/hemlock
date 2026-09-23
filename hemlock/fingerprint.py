@@ -1,32 +1,7 @@
-"""Structural fingerprints, for telling "the same code" from "the same text".
+"""Compare source structure after removing names, strings and comments.
 
-A campaign does not copy a file byte for byte. It runs the payload through a
-minifier, or renames its variables, or moves the webhook URL into a different
-string, and every one of those changes the hash while changing nothing about
-what the code does. Comparing digests catches only the laziest version of the
-attack, and comparing raw text catches whitespace.
-
-So this compares shape. Source is tokenized, then everything an attacker gets
-to choose freely is erased: identifiers become `id`, strings become `str`,
-numbers become `num`, comments disappear. What survives is the grammar --
-keywords, operators, brackets, and the order they arrive in. Two files that do
-the same thing under different names normalize to the same token stream.
-
-The token stream is then reduced to a fingerprint set by winnowing
-(Schleimer, Wilkerson and Aiken, 2003). Every k-gram of tokens is hashed, a
-window slides over those hashes, and the smallest hash in each window is kept.
-The result is a fraction of the hashes, it is stable under insertion and
-deletion elsewhere in the file, and it has the property the naive "sample
-every nth hash" approach does not: any shared passage longer than the
-guarantee threshold is certain to share at least one selected fingerprint.
-
-That last property is what makes the comparison cheap. Fingerprints go into an
-inverted index, and only files that already share one are ever compared in
-full, so a lockfile with two thousand packages does not turn into two million
-comparisons.
-
-Nothing here decides anything. It answers one question -- how much structure
-do these two files have in common -- and `campaign.py` decides what that means.
+Winnowing keeps selected token hashes so copied passages can be found after
+renaming or minification without comparing every pair of files.
 """
 
 from __future__ import annotations
@@ -404,7 +379,7 @@ def label_for(prints: set[int] | frozenset[int]) -> str:
     it means without printing a thousand integers."""
     if not prints:
         return ""
-    digest = hashlib.blake2b(digest_size=3)
+    digest = hashlib.blake2b(digest_size=8)
     for h in sorted(prints):
         digest.update(h.to_bytes(8, "big"))
     return digest.hexdigest()

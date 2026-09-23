@@ -2,97 +2,17 @@
 
 ## 0.9.0
 
-Every rule in this tool judged one package at a time. That is the right unit
-for a typosquat, which is a fact about a single name, and it is the wrong unit
-for what has actually been happening to npm.
+Hemlock now compares installed npm packages for shared install code, hosts,
+and newly used publisher accounts. It reports linked packages as one campaign.
 
-A compromise now is rarely one bad package. It is one payload, pushed into
-however many packages a stolen token could reach. Shai-Hulud put the same
-`bundle.js` behind a `postinstall` in hundreds of them over a weekend, all
-reporting to one webhook. Read one of those on its own and you get a package
-that runs a script at install time: a medium, the kind of finding a busy
-repository already has forty of, sitting under a threshold nothing fails on.
-Read six of them together and you have the incident. The difference between
-those two readings is not a better rule. It is a different unit of judgement.
+- Added HEM801 to HEM803, campaign output in terminal, Markdown and JSON, and
+  `--no-correlate` plus the `correlate` config option.
+- Added an installed fixture whose four packages score low alone and critical
+  when their shared payload is found.
+- Added a CI check for that campaign and its severity.
 
-### Added
-
-- **Packages are now compared against each other.** Three new rules report
-  what only exists between packages: HEM801 when install-time code is the same
-  code, HEM802 when install paths reach the same unexplained host, HEM803 when
-  one account is new to several packages it has just published. Linked
-  packages are reported as one campaign, stated once above the per-package
-  list rather than repeated on every member of it.
-
-- **Structural fingerprints, so repacking does not work.** Source is tokenized
-  and everything an attacker chooses freely is erased: identifiers collapse to
-  one token, string contents and numbers go entirely, comments disappear. What
-  survives is the grammar. The streams are then reduced by winnowing
-  (Schleimer, Wilkerson and Aiken), which guarantees that any shared passage
-  over a threshold shares a selected fingerprint — so files that already share
-  one are the only pairs ever compared, and a tree of two thousand packages
-  does not become four million comparisons.
-
-  Renaming every variable, re-minifying the file and changing the address it
-  reports to each leave the match at 100%. A payload pasted into a file that
-  also contains real code is matched by containment rather than similarity,
-  because a small payload inside a large file is most of one side and a
-  fraction of the other.
-
-- **The escalation reuses the arithmetic rather than inventing one.**
-  `campaign` is an ordinary rule category, so a correlated finding is weighted,
-  suppressed, baselined, explained and serialized by the machinery everything
-  else uses, and the existing rule that agreement across categories counts for
-  more does the escalation on its own. On the bundled fixture, four packages
-  that score 18 apiece alone score 100 together, and the report prints which
-  number it was before.
-
-- **A campaign is an object, not just findings.** `--format json` carries a
-  `campaigns` array with members, links and the measurement behind each one,
-  so something opening one ticket per incident gets the incident rather than
-  having to reassemble it from per-package rows. Markdown puts it above the
-  table for the same reason.
-
-- **`--no-correlate` and `correlate = false`.** Packages outside a campaign
-  score identically either way, which is asserted rather than claimed.
-
-### What it does not reach
-
-Correlation reads code that is installed. A lockfile names versions rather
-than containing them, so HEM801 and HEM802 need `node_modules` or a local
-virtual environment on disk. A scan that had nothing to compare now says so
-instead of reporting a quiet all-clear, because no campaigns found because
-there was no code to read looks exactly like no campaigns found after reading
-everything, and only one of those is a claim this tool has earned.
-
-For the same reason the payload and endpoint comparisons are npm-only today:
-they read install hooks and declared entry points, and a wheel has neither.
-HEM803 needs the per-version publisher npm records and PyPI does not.
-
-An accepted campaign stops being reported. A baseline strips the findings and
-rescores what is left, and the campaign section follows that rather than
-printing itself over a list with nothing in it.
-
-### Notes on staying quiet
-
-Five guards do most of the work here, and each exists because without it
-something large and entirely innocent lights up. Only code an install would
-execute is fingerprinted, rather than every file in the tree, so a vendored
-helper under `dist/` is not evidence of anything. Packages sharing an owner
-are never linked to each other, so a monorepo shipping one helper across its
-own scope is a build system rather than a campaign. A host or account shared
-by more than sixty owners is an idiom. A publish burst never forms a link by
-itself, because half a dependency tree moves in the same week for dull
-reasons. And code with no structural variety is not compared at all: a barrel
-of two hundred re-exports and a generated constants table normalize to the
-same short pattern repeated, so without that floor every generated file in a
-tree matches every other one.
-
-That third guard originally applied to shared payloads as well. It should not
-have: a scan of fifteen hundred packages carrying one identical install script
-reported nothing at all, because the cap read the largest possible compromise
-as the most ordinary idiom. Size is not evidence of innocence here, and the
-cap no longer applies to code.
+Payload and host comparison require `node_modules` on disk. A lockfile alone
+has no source code to compare.
 
 ## 0.8.1
 

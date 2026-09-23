@@ -1,56 +1,4 @@
-"""Correlation: the findings that only exist between packages.
-
-Every other part of this tool judges one package at a time. That is the right
-unit for a typosquat, which is a fact about a single name, and it is the wrong
-unit for the thing that has actually been happening to npm.
-
-A modern compromise is not one bad package. It is one payload, pushed into
-however many packages the stolen token could reach. Shai-Hulud put the same
-`bundle.js` behind a `postinstall` in hundreds of them in a weekend, all
-reporting to one webhook. Read one of those packages on its own and you get a
-package that runs a script at install time and ships a file that is hard to
-read: a medium, the kind of finding a busy repository has forty of. Read six
-of them together and you get the incident.
-
-The difference between those two readings is not a better rule. It is a
-different unit of judgement, and this module is that unit. It looks for
-evidence that two packages are the same operation:
-
-- the same code, compared by shape so that renaming and re-minifying do not
-  hide it (see `fingerprint.py`);
-- the same network endpoint, once the places everybody talks to are removed;
-- the same account, but only where that account is new to the packages it has
-  just published.
-
-Packages linked by any of those are one campaign, and the campaign is reported
-through the ordinary rules HEM801-HEM803, in a category of its own. That is
-deliberate: it means a correlated finding is weighted, suppressed, baselined,
-serialized and explained by exactly the machinery everything else uses, and it
-means the existing "categories that agree count for more" arithmetic does the
-escalation without a second scoring system being invented for it.
-
-The hard part is not finding links. It is not finding them everywhere. Five
-guards do that work, and each one exists because without it something
-enormous and entirely innocent lights up:
-
-1. Only code that an install would actually execute is fingerprinted --
-   scripts named by a hook, declared entry points -- rather than every file in
-   the tree. A vendored copy of a helper library under `dist/` is shared by
-   thousands of packages and means nothing.
-2. Any indicator shared by more than `CROWD` packages is dropped as an idiom.
-   Real campaigns are large but not universal, and a fingerprint held by four
-   hundred packages is a common bundler prelude.
-3. Packages that share an owner are never linked to each other. A monorepo
-   publishes one helper in thirty packages under one scope, and that is a
-   build system, not a campaign.
-4. A publish burst is never a link by itself. Half a dependency tree moves in
-   the same week for entirely boring reasons; timing corroborates a link that
-   already exists, and proves nothing on its own.
-5. Code with no structural variety is not compared at all -- see `MIN_PRINTS`
-   in `fingerprint.py`. A barrel of re-exports and a generated constants table
-   normalize to the same short pattern repeated, and would otherwise match
-   each other and everything like them.
-"""
+"""Find campaigns across npm packages using install code, hosts and publisher history."""
 
 from __future__ import annotations
 
@@ -62,18 +10,8 @@ from datetime import timedelta
 from . import fingerprint as fp
 from .model import Package
 
-# A value held by more than this many distinct owners is describing the
-# ecosystem rather than an incident. It applies to hosts and accounts, where a
-# popular endpoint or a busy organization account really can be shared by
-# hundreds of unrelated packages for dull reasons.
-#
-# It deliberately does NOT apply to a shared payload. The first version of
-# this capped that too, and the result was that a scan of fifteen hundred
-# packages carrying one identical install script reported nothing at all: the
-# cap read the largest possible compromise as the most ordinary idiom. Size is
-# not evidence of innocence here. Several hundred packages under several
-# hundred different owners shipping the same install-time code has one
-# explanation, and it is the one this tool exists to print.
+# Ignore hosts and accounts shared by more than this many owners. Payloads
+# have no cap because a large copied install script is still relevant.
 CROWD = 60
 
 # How alike two files have to be. Containment rather than similarity, because
@@ -198,14 +136,7 @@ def install_commands(pkg: Package) -> list[str]:
 
 
 def install_reachable(pkg: Package) -> list[str]:
-    """Files an install would run, as absolute paths that exist on disk.
-
-    Three sources, in the order an attacker uses them: a file named directly
-    by a hook, a declared binary, and the package's own entry point. Anything
-    outside the package directory is refused -- a hook is free to name
-    `../../etc/passwd`, and following that would read a file this scan has no
-    business opening and attribute it to the package.
-    """
+    """Files named by install hooks, confined to the package directory."""
     root = pkg.source_dir
     if not root or not os.path.isdir(root):
         return []
@@ -213,15 +144,6 @@ def install_reachable(pkg: Package) -> list[str]:
     names: list[str] = []
     for cmd in install_commands(pkg):
         names += _SCRIPT_REF.findall(cmd)
-
-    doc = _installed_manifest(pkg)
-    binv = doc.get("bin")
-    if isinstance(binv, str):
-        names.append(binv)
-    elif isinstance(binv, dict):
-        names += [v for v in binv.values() if isinstance(v, str)]
-    if isinstance(doc.get("main"), str):
-        names.append(doc["main"])
 
     real_root = os.path.realpath(root)
     out: list[str] = []
@@ -245,11 +167,6 @@ def install_reachable(pkg: Package) -> list[str]:
         if len(out) >= MAX_FILES_PER_PACKAGE:
             break
     return out
-
-
-def _installed_manifest(pkg: Package) -> dict:
-    """package.json fields the parser kept, without re-reading the file."""
-    return {k: pkg.meta[k] for k in ("bin", "main", "repository") if k in pkg.meta}
 
 
 def _read(path: str) -> str | None:
@@ -414,13 +331,11 @@ def _shared_value_links(by_key: dict[str, Package], kind: str, extract) -> list[
     links: list[Link] = []
     for value, keys in sorted(holders.items()):
         keys = sorted(set(keys))
-        if len(keys) < 2 or len(keys) > CROWD:
+        distinct_owners = _drop_same_owner(keys, by_key)
+        if len(distinct_owners) < 2 or len(distinct_owners) > CROWD:
             continue
-        kept = _drop_same_owner(keys, by_key)
-        if len(kept) < 2:
-            continue
-        links.append(Link(kind=kind, key=value, display=value, members=tuple(kept),
-                          detail=_VALUE_DETAIL[kind].format(n=len(kept))))
+        links.append(Link(kind=kind, key=value, display=value, members=tuple(keys),
+                          detail=_VALUE_DETAIL[kind].format(n=len(keys))))
     return links
 
 
@@ -431,14 +346,7 @@ _VALUE_DETAIL = {
 
 
 def _drop_same_owner(keys: list[str], by_key: dict[str, Package]) -> list[str]:
-    """Collapse each owner to one representative.
-
-    A shared value across thirty packages of one scope is one package as far
-    as this is concerned. Keeping a single representative rather than
-    discarding the whole group is what preserves the case that matters: one
-    monorepo and one unrelated package sharing a payload is still a link, and
-    it is the interesting one.
-    """
+    """Count distinct owners when deciding whether a shared value is a link."""
     kept: list[str] = []
     seen_owners: set[str] = set()
     for key in keys:
@@ -489,22 +397,23 @@ def _payload_links(by_key: dict[str, Package], sources: dict[str, list[tuple[str
     if len(sketches) < 2:
         return []
 
-    # payload label -> the packages carrying it, so that one Link describes one
-    # payload rather than one pair.
-    matched: dict[str, set[str]] = {}
-    evidence: dict[str, float] = {}
+    # Fingerprint set -> packages carrying it, so one Link describes the payload.
+    matched: dict[frozenset[int], set[str]] = {}
+    evidence: dict[frozenset[int], float] = {}
+    matched_where: dict[frozenset[int], str] = {}
 
     # Pass one: exact agreement, in linear time.
-    exact: dict[str, list[str]] = {}
+    # Use the full fingerprint set here. Display labels are only identifiers.
+    exact: dict[frozenset[int], list[str]] = {}
     for fid, sk in sketches.items():
-        exact.setdefault(sk.label, []).append(fid)
-    for label, fids in exact.items():
+        exact.setdefault(sk.prints, []).append(fid)
+    for prints, fids in exact.items():
         owners = {owner[fid] for fid in fids}
         if len(owners) < 2:
             continue
-        matched[label] = owners
-        evidence[label] = 1.0
-        where[label] = where[fids[0]]
+        matched[prints] = owners
+        evidence[prints] = 1.0
+        matched_where[prints] = where[fids[0]]
 
     # Pass two: partial agreement, over one representative per distinct shape.
     residual = {fids[0]: sketches[fids[0]] for fids in exact.values()}
@@ -516,36 +425,33 @@ def _payload_links(by_key: dict[str, Package], sources: dict[str, list[tuple[str
         sa, sb = sketches[a], sketches[b]
         if fp.shared_run(sa, sb) < SAME_CODE_FLOOR or fp.containment(sa, sb) < SAME_CODE:
             continue
-        shared = fp.label_for(sa.prints & sb.prints)
+        shared = sa.prints & sb.prints
         if shared in matched and evidence.get(shared) == 1.0:
             continue  # already reported as an exact group
         # Everything that normalized to either shape carries this payload, not
         # only the two representatives that were compared.
-        group = {owner[fid] for fid in exact[sa.label] + exact[sb.label]}
+        group = {owner[fid] for fid in exact[sa.prints] + exact[sb.prints]}
         matched.setdefault(shared, set()).update(group)
         evidence[shared] = max(evidence.get(shared, 0.0), fp.similarity(sa, sb))
-        where.setdefault(shared, where[a])
+        matched_where.setdefault(shared, where[a])
 
     links: list[Link] = []
-    for shared, keys in sorted(matched.items()):
-        # The same owner collapse the value links use. Pairwise rejection above
-        # stops two packages of one scope linking to each other, but it does
-        # not stop thirty of them each linking to the same outsider and
-        # arriving here as one thirty-one member campaign. The outsider is the
-        # finding; the scope behind it is one entry.
-        members = _drop_same_owner(sorted(keys), by_key)
-        if len(members) < 2:
+    for shared, keys in sorted(matched.items(), key=lambda item: fp.label_for(item[0])):
+        # Require separate owners to form a link, then retain every affected
+        # package. Dropping a scope's other members would hide detections.
+        members = sorted(keys)
+        if len(_drop_same_owner(members, by_key)) < 2:
             continue
         pct = round(evidence[shared] * 100)
         same = "identical" if pct == 100 else f"{pct}% identical"
         links.append(Link(
             kind="payload",
-            key=shared,
-            display=f"payload {shared}",
+            key=fp.label_for(shared),
+            display=f"payload {fp.label_for(shared)}",
             members=tuple(members),
             detail=f"{same} code in {plural(len(members), 'package')} under "
                    f"{plural(_owners(members, by_key), 'separate owner')}, compared after "
-                   f"names and strings are removed (first seen as {where[shared]})",
+                   f"names and strings are removed (first seen as {matched_where[shared]})",
         ))
     return links
 

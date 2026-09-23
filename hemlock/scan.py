@@ -62,9 +62,8 @@ class Report:
 # and that code only exists once something has installed it. A lockfile on its
 # own names versions; it does not contain them.
 NO_SOURCE = (
-    "no installed packages were found on disk, so the payload and endpoint comparisons "
-    "had nothing to read. Correlation reads node_modules or a local virtual environment; "
-    "run it after an install, or pass --no-correlate to stop it being offered."
+    "no installed npm packages were found on disk, so payload and endpoint checks "
+    "had nothing to read. Run after installing dependencies or use --no-correlate."
 )
 
 
@@ -78,9 +77,10 @@ def _note_correlation_scope(report: Report, packages: list[Package]) -> None:
     `check` is exempt: a name on the command line never has source behind it,
     and its scope line already says so in more detail than this would.
     """
-    if not report.root or not packages:
+    npm_packages = [p for p in packages if p.ecosystem == "npm"]
+    if not report.root or not npm_packages:
         return
-    if any(p.source_dir for p in packages):
+    if any(p.source_dir for p in npm_packages):
         return
     report.warnings.append(NO_SOURCE)
 

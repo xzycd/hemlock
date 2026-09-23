@@ -231,15 +231,22 @@ def test_one_repository_shipping_two_packages_is_not_a_campaign(tmp_path):
 
 
 def test_a_scoped_monorepo_still_links_to_an_outsider(tmp_path):
-    """Collapsing an owner to one representative rather than dropping the
-    group keeps the case that matters: the outsider that joined them."""
     pkgs = [make(tmp_path, "@acme/one"), make(tmp_path, "@acme/two"),
             make(tmp_path, "stranger", rename(PAYLOAD, "v"))]
     found = camp.correlate(pkgs)
     assert len(found) == 1
     names = {p.name for p in found[0].members}
-    assert "stranger" in names and len(names & {"@acme/one", "@acme/two"}) == 1
-    assert len(names) == 2
+    assert names == {"@acme/one", "@acme/two", "stranger"}
+
+
+def test_a_short_display_label_collision_does_not_link_unrelated_code(tmp_path, monkeypatch):
+    def colliding_sketch(text, lang):
+        prints = frozenset(range(20)) if text == "first" else frozenset(range(40, 60))
+        return fp.Sketch(label="same", tokens=200, prints=prints)
+
+    monkeypatch.setattr(fp, "sketch", colliding_sketch)
+    pkgs = [make(tmp_path, "one", body="first"), make(tmp_path, "two", body="second")]
+    assert camp.correlate(pkgs) == []
 
 
 def test_everybodys_hosts_are_not_a_relationship(tmp_path):
@@ -267,6 +274,16 @@ def test_a_host_reached_by_a_crowd_is_an_idiom(tmp_path):
                  hook=f"curl https://popular.example.invalid/{i}")
             for i in range(camp.CROWD + 5)]
     assert camp.correlate(pkgs) == []
+
+
+def test_a_large_scope_and_one_outsider_do_not_hit_the_host_crowd_cap(tmp_path):
+    hook = "curl https://collector.example.invalid/data"
+    pkgs = [make(tmp_path, f"@acme/p{i}", body="// nothing\n", hook=hook)
+            for i in range(camp.CROWD + 1)]
+    pkgs.append(make(tmp_path, "outsider", body="// nothing\n", hook=hook))
+    found = camp.correlate(pkgs)
+    assert len(found) == 1
+    assert len(found[0].members) == len(pkgs)
 
 
 def test_a_payload_shared_by_a_crowd_is_the_worst_case_not_the_dullest(tmp_path):
@@ -345,6 +362,12 @@ def test_code_that_no_install_would_run_is_not_fingerprinted(tmp_path):
         (d / "dist" / "vendor.js").write_text(PAYLOAD)
         (d / "package.json").write_text("{}")
     pkgs = [Package("npm", n, version="1.0.0", source_dir=str(tmp_path / n)) for n in ("one", "two")]
+    assert camp.correlate(pkgs) == []
+
+
+def test_runtime_entry_points_are_not_treated_as_install_hooks(tmp_path):
+    pkgs = [make(tmp_path, "one", hook="", main="setup.js", bin="setup.js"),
+            make(tmp_path, "two", hook="", main="setup.js", bin="setup.js")]
     assert camp.correlate(pkgs) == []
 
 
@@ -609,6 +632,16 @@ def test_a_suppressed_campaign_rule_stops_being_reported():
     policy = Policy(ignores=[Ignore(rule="HEM8*", package="*", reason="reviewed")])
     report = scan.run(FIXTURE, policy)
     assert report.campaigns and fmt.live_campaigns(report) == []
+
+
+def test_a_suppressed_link_is_absent_from_the_campaign_report():
+    from hemlock.policy import Ignore
+    policy = Policy(ignores=[Ignore(rule="HEM801", package="*", reason="reviewed")])
+    report = scan.run(FIXTURE, policy)
+    visible = fmt.live_campaigns(report)
+    assert len(visible) == 1
+    assert {link.kind for link in visible[0].links} == {"endpoint"}
+    assert {link["kind"] for link in json.loads(fmt.as_json(report))["campaigns"][0]["links"]} == {"endpoint"}
 
 
 def test_a_scan_with_nothing_installed_says_so(tmp_path):

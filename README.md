@@ -19,8 +19,7 @@ names, install hooks, obfuscated source, weak lockfile entries, unusual
 publisher changes, missing build provenance, and versions reported as malware.
 It works offline by default and never executes package code.
 
-It also compares your packages against each other, because the compromises
-that matter now arrive several packages at a time.
+It also compares installed npm packages for shared install code and hosts.
 
 This is not a model or a black-box score. Every result includes the rule,
 evidence, remedy, and arithmetic that produced it.
@@ -109,84 +108,18 @@ The default failure threshold is high. Change it with
 
 ## Packages judged together
 
-Every rule below HEM800 judges one package on its own. That is the right unit
-for a typosquat and the wrong one for what has been happening to npm.
+Hemlock compares npm packages in an installed tree. HEM801 finds shared code
+named by install hooks; HEM802 finds shared hosts in those hooks or files;
+HEM803 finds an account newly publishing several packages. These links appear
+as a campaign above the package results.
 
-A modern compromise is not one bad package. It is one payload, pushed into
-however many packages a stolen token could reach. Shai-Hulud put the same
-`bundle.js` behind a `postinstall` in hundreds of them over a weekend, all
-reporting to one webhook. Read one of those on its own and you get a package
-that runs a script at install time: a medium, the kind of finding a busy
-repository already has forty of. Read six together and you have the incident.
+The bundled fixture has four packages that score low alone and critical when
+Hemlock finds their shared install payload. Run `hemlock scan
+examples/compromised-app` to see the result.
 
-So Hemlock compares packages against each other as well as judging them alone:
-
-- **The same code.** Install-time source is tokenized and everything an
-  attacker picks freely is erased — identifiers become `id`, string contents
-  and numbers go entirely, comments disappear. What is left is compared by
-  winnowed fingerprints. Renaming every variable, re-minifying the file, and
-  changing the address it reports to all leave the match intact.
-- **The same endpoint.** Hosts reached from install-time code, once
-  registries, runtimes, the large CDNs and the package's own declared
-  repository are removed.
-- **The same new account.** One publisher behind several packages, counted
-  only where that account is new to each of them.
-
-Linked packages are reported as one campaign, above the per-package list,
-through rules HEM801 to HEM803. The first two read installed code, so run them
-against a tree that has been installed, and an accepted campaign stops being
-reported like any other baselined finding.
-
-Because correlation is an ordinary rule category, it is weighted, suppressed,
-baselined and serialized by the same machinery as everything else, and the
-existing "categories that agree count for more" arithmetic does the escalation
-without a second scoring system.
-
-On the bundled fixture, four packages that score 18 apiece alone score 100
-together:
-
-```
-  correlated  packages that arrived together ──────────  1 campaign · 4 packages
-
-  ▌ C1  4 packages sharing one install payload, one endpoint
-  ▌
-  ▌                              1  2
-  ▌   fs-metadata 2.1.4          ●  ●
-  ▌   nuxt-icon-set 0.9.2        ●  ●
-  ▌   swc-loader-utils 2.1.4     ●  ●
-  ▌   dom-serialize-fast 2.1.4   ●  ·
-  ▌
-  ▌    1  payload 21e21f
-  ▌       identical code in 4 packages under 4 separate owners, compared after
-  ▌       names and strings are removed (first seen as scripts/setup.js)
-  ▌    2  endpoint telemetry-collect.example.invalid
-  ▌       reached from the install path of 3 packages
-  ▌
-  ▌   Read one at a time, 4 of these come back as a low finding and no build
-  ▌   stops. They are one finding in several places. Remove them together.
-```
-
-Five guards keep this quiet on honest projects, and each exists because
-without it something large and innocent lights up:
-
-- Only code an install would actually execute is fingerprinted — files named
-  by a hook, declared binaries, declared entry points — rather than every file
-  in the tree. A vendored helper under `dist/` is shared by thousands of
-  packages and means nothing.
-- Packages that share an owner are never linked to each other. A monorepo
-  publishing one helper across its own scope is a build system.
-- A host or an account shared by more than sixty owners is an idiom, not an
-  incident. This cap deliberately does not apply to a shared payload: several
-  hundred separate owners shipping identical install code has one explanation.
-- A publish burst is never a link on its own. Half a dependency tree moves in
-  the same week for dull reasons; timing corroborates a link that already
-  exists.
-- Code that is one pattern repeated — a barrel of re-exports, a generated
-  constants table, forty identical stubs — is not compared at all. These
-  normalize to the same short stream however different their contents are, so
-  without this every generated file in the tree matches every other one.
-
-Turn it off with `--no-correlate` or `correlate = false` in `.hemlock.toml`.
+Payload and host checks need `node_modules` on disk. A lockfile alone has no
+source code to compare. Use `--no-correlate` or `correlate = false` to skip the
+comparison. Correlation is currently limited to npm packages.
 
 ## Changes and history
 
@@ -285,17 +218,15 @@ not execute install hooks or imported code.
 - Provenance rules read the registry's verified result. They do not yet verify
   the Sigstore bundle locally.
 - Correlation reads code that is installed. A lockfile names versions rather
-  than containing them, so HEM801 and HEM802 need `node_modules` or a local
-  virtual environment on disk; run them after an install. A scan that had
-  nothing to read says so rather than reporting a quiet all-clear.
+  than containing them, so HEM801 and HEM802 need `node_modules` on disk. A scan that had
+  nothing to read says so.
 - The payload and endpoint comparisons are effectively npm-only today. They
-  read install hooks and declared entry points, and a wheel has neither.
+  read install hooks, and a wheel has no equivalent.
   HEM803 needs the per-version publisher that npm records and PyPI does not.
 - Correlation compares install-time code, so a payload that only runs when the
   package is imported is outside what it reads. It can also link two packages
-  that genuinely vendor the same code under different owners, which is a true
-  statement that may not be the one you wanted; HEM801 is suppressible like any
-  other rule.
+  that genuinely vendor the same code under different owners. HEM801 can be
+  suppressed after review.
 - Heuristics can produce false positives. Suppressions and baselines exist for
   reviewed cases.
 - Only npm and PyPI are supported.

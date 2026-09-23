@@ -16,8 +16,10 @@ from __future__ import annotations
 import json
 import os
 import textwrap
+from dataclasses import replace
 
 from . import ui
+from .campaign import key_of
 from .model import CATEGORIES, RULES, Rule
 from .scan import Report
 from .score import arithmetic
@@ -302,27 +304,29 @@ MAX_CAMPAIGN_ROWS = 12
 
 
 def live_campaigns(report) -> list:
-    """Campaigns that still have something to say after filtering.
-
-    A baseline strips accepted findings off the verdicts and rescores what is
-    left, and a suppression never lets them through at all. Neither of those
-    touches the campaign list, so without this a project that has explicitly
-    accepted a campaign still gets the whole block printed at it -- and, once
-    every member has been accepted, gets it printed with nothing underneath.
-    Accepted means accepted.
-    """
+    """Show only campaign links whose findings survived policy and baseline."""
     campaigns = getattr(report, "campaigns", None) or []
     if not campaigns:
         return []
-    alive = {f.rule.id for v in report.verdicts for f in v.findings if f.rule.category == "campaign"}
-    if not alive:
-        return []
-    speaking = set()
+    kinds = {"HEM801": "payload", "HEM802": "endpoint", "HEM803": "publisher"}
+    active: dict[str, set[str]] = {}
     for v in report.verdicts:
         for f in v.findings:
-            if f.rule.category == "campaign":
-                speaking.add(v.package.coord)
-    return [c for c in campaigns if any(m.coord in speaking for m in c.members)]
+            if kind := kinds.get(f.rule.id):
+                active.setdefault(key_of(v.package), set()).add(kind)
+
+    visible = []
+    for camp in campaigns:
+        links = []
+        for ln in camp.links:
+            members = tuple(key for key in ln.members if ln.kind in active.get(key, ()))
+            if len(members) >= 2:
+                links.append(replace(ln, members=members))
+        if links:
+            member_keys = {key for link in links for key in link.members}
+            members = [m for m in camp.members if key_of(m) in member_keys]
+            visible.append(replace(camp, members=members, links=links, _keys=None))
+    return visible
 
 
 def _campaigns_block(report, ink: Ink, g: dict, w: int) -> list[str]:
