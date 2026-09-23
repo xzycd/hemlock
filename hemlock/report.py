@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import textwrap
 from dataclasses import replace
 
 from . import ui
-from .campaign import key_of
+from .campaign import key_of, owner_of
 from .model import CATEGORIES, RULES, Rule
 from .scan import Report
 from .score import arithmetic
@@ -321,11 +322,20 @@ def live_campaigns(report) -> list:
         for ln in camp.links:
             members = tuple(key for key in ln.members if ln.kind in active.get(key, ()))
             if len(members) >= 2:
-                links.append(replace(ln, members=members))
+                detail = ln.detail
+                if len(members) != len(ln.members):
+                    detail = re.sub(r"\b\d+ packages\b", f"{len(members)} packages", detail, count=1)
+                    if ln.kind == "payload":
+                        by_key = {key_of(m): m for m in camp.members}
+                        owners = [owner_of(by_key[key]) for key in members]
+                        count = len({owner for owner in owners if owner is not None}) + owners.count(None)
+                        detail = re.sub(r"\b\d+ separate owners\b", f"{count} separate owners", detail, count=1)
+                links.append(replace(ln, members=members, detail=detail))
         if links:
             member_keys = {key for link in links for key in link.members}
             members = [m for m in camp.members if key_of(m) in member_keys]
-            visible.append(replace(camp, members=members, links=links, _keys=None))
+            burst = camp.burst if len(members) == len(camp.members) else ""
+            visible.append(replace(camp, members=members, links=links, burst=burst, _keys=None))
     return visible
 
 

@@ -644,6 +644,17 @@ def test_a_suppressed_link_is_absent_from_the_campaign_report():
     assert {link["kind"] for link in json.loads(fmt.as_json(report))["campaigns"][0]["links"]} == {"endpoint"}
 
 
+def test_suppressing_one_member_updates_campaign_counts():
+    from hemlock.policy import Ignore
+    policy = Policy(ignores=[Ignore(rule="HEM801", package="dom-serialize-fast", reason="reviewed")])
+    report = scan.run(FIXTURE, policy)
+    visible = fmt.live_campaigns(report)
+    assert len(visible) == 1 and len(visible[0].members) == 3
+    payload = visible[0].links_of("payload")[0]
+    assert len(payload.members) == 3
+    assert "3 packages" in payload.detail
+
+
 def test_a_scan_with_nothing_installed_says_so(tmp_path):
     """Finding no campaigns because there was no code to compare looks exactly
     like comparing everything and finding nothing. The second is a much
