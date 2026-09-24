@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0
+
+Hemlock now compares installed npm packages for shared install code, hosts,
+and newly used publisher accounts. It reports linked packages as one campaign.
+
+- Added HEM801 to HEM803, campaign output in terminal, Markdown and JSON, and
+  `--no-correlate` plus the `correlate` config option.
+- Added an installed fixture whose four packages score low alone and critical
+  when their shared payload is found.
+- Added a CI check for that campaign and its severity.
+
+Payload and host comparison require `node_modules` on disk. A lockfile alone
+has no source code to compare.
+
 ## 0.8.1
 
 - Registry tarball URLs are now recognized by their parsed hostname. A URL

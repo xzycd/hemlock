@@ -19,6 +19,8 @@ names, install hooks, obfuscated source, weak lockfile entries, unusual
 publisher changes, missing build provenance, and versions reported as malware.
 It works offline by default and never executes package code.
 
+It also compares installed npm packages for shared install code and hosts.
+
 This is not a model or a black-box score. Every result includes the rule,
 evidence, remedy, and arithmetic that produced it.
 
@@ -71,7 +73,7 @@ to report only or `--yes` to skip the question.
 
 ## What it reports
 
-The 26 rules cover six areas:
+The 29 rules cover seven areas:
 
 | Area | Examples |
 |---|---|
@@ -81,9 +83,10 @@ The 26 rules cover six areas:
 | Lockfiles | floating versions, missing hashes, HTTP downloads, extra indexes |
 | Registry trust | fresh or withdrawn releases, new publishers, missing repositories |
 | Public records | build provenance, advisories, and exact malware reports |
+| Correlated activity | one payload, one endpoint, or one new account across several packages |
 
-Fifteen rules run offline. Online mode adds eleven checks backed by public npm,
-PyPI, and OSV endpoints. Run `hemlock rules` for the full list and
+Seventeen rules run offline. Online mode adds twelve checks backed by public
+npm, PyPI, and OSV endpoints. Run `hemlock rules` for the full list and
 `hemlock explain HEMxxx` for the reason behind a rule.
 
 An exact malware record is treated as a fact and settles the verdict. Other
@@ -102,6 +105,21 @@ Severity bands are:
 
 The default failure threshold is high. Change it with
 `--fail-on low|medium|high|critical|never` or in `.hemlock.toml`.
+
+## Packages judged together
+
+Hemlock compares npm packages in an installed tree. HEM801 finds shared code
+named by install hooks; HEM802 finds shared hosts in those hooks or files;
+HEM803 finds an account newly publishing several packages. These links appear
+as a campaign above the package results.
+
+The bundled fixture has four packages that score low alone and critical when
+Hemlock finds their shared install payload. Run `hemlock scan
+examples/compromised-app` to see the result.
+
+Payload and host checks need `node_modules` on disk. A lockfile alone has no
+source code to compare. Use `--no-correlate` or `correlate = false` to skip the
+comparison. Correlation is currently limited to npm packages.
 
 ## Changes and history
 
@@ -166,6 +184,7 @@ Configuration is optional. Put `.hemlock.toml` at the project root:
 ```toml
 fail_on = "high"
 fresh_days = 14
+correlate = true
 
 [[ignore]]
 rule = "HEM201"
@@ -198,6 +217,16 @@ not execute install hooks or imported code.
 - It is not a sandbox and cannot prove a package is safe.
 - Provenance rules read the registry's verified result. They do not yet verify
   the Sigstore bundle locally.
+- Correlation reads code that is installed. A lockfile names versions rather
+  than containing them, so HEM801 and HEM802 need `node_modules` on disk. A scan that had
+  nothing to read says so.
+- The payload and endpoint comparisons are effectively npm-only today. They
+  read install hooks, and a wheel has no equivalent.
+  HEM803 needs the per-version publisher that npm records and PyPI does not.
+- Correlation compares install-time code, so a payload that only runs when the
+  package is imported is outside what it reads. It can also link two packages
+  that genuinely vendor the same code under different owners. HEM801 can be
+  suppressed after review.
 - Heuristics can produce false positives. Suppressions and baselines exist for
   reviewed cases.
 - Only npm and PyPI are supported.
@@ -224,8 +253,8 @@ changelog, then create an annotated tag after the release commit reaches the
 default branch:
 
 ```bash
-git tag -s v0.8.1 -m "hemlock v0.8.1"
-git push origin v0.8.1
+git tag -s v0.9.0 -m "hemlock v0.9.0"
+git push origin v0.9.0
 ```
 
 The workflow runs lint, tests, and the known-bad fixture before it builds and

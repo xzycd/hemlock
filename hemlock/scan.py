@@ -7,6 +7,8 @@ import time
 from dataclasses import dataclass, field
 
 from . import npm, pypi, rules  # noqa: F401  (importing rules registers them)
+from .campaign import Campaign
+from .campaign import correlate as find_campaigns
 from .graph import Graph
 from .graph import build as build_graph
 from .model import Context, Finding, Package, Verdict, active_rules
@@ -35,6 +37,7 @@ class Report:
     baselined: int = 0
     elapsed: float = 0.0
     graph: Graph | None = None
+    campaigns: list[Campaign] = field(default_factory=list)
 
     @property
     def flagged(self) -> list[Verdict]:
@@ -53,6 +56,33 @@ class Report:
         for v in self.flagged:
             out[v.severity] += 1
         return out
+
+
+# Comparing packages against each other means reading the code they would run,
+# and that code only exists once something has installed it. A lockfile on its
+# own names versions; it does not contain them.
+NO_SOURCE = (
+    "no installed npm packages were found on disk, so payload and endpoint checks "
+    "had nothing to read. Run after installing dependencies or use --no-correlate."
+)
+
+
+def _note_correlation_scope(report: Report, packages: list[Package]) -> None:
+    """Say so when correlation ran over nothing.
+
+    A scan that quietly finds no campaigns because it had no code to compare
+    looks exactly like a scan that compared everything and found nothing, and
+    the second of those is a much stronger claim than this made.
+
+    `check` is exempt: a name on the command line never has source behind it,
+    and its scope line already says so in more detail than this would.
+    """
+    npm_packages = [p for p in packages if p.ecosystem == "npm"]
+    if not report.root or not npm_packages:
+        return
+    if any(p.source_dir for p in npm_packages):
+        return
+    report.warnings.append(NO_SOURCE)
 
 
 def _stage(progress, label: str):
@@ -192,6 +222,19 @@ def run_rules(report: Report, policy: Policy, online: bool, packages: list[Packa
     """
     ctx = ctx or Context(root=report.root, online=online, packages=packages,
                          fresh_days=policy.fresh_days)
+
+    # Correlation runs first and once. The HEM8xx rules report what it found;
+    # they do not each go looking, because what they report is a fact about
+    # the set rather than about any package in it.
+    if policy.correlate and not ctx.campaigns:
+        try:
+            ctx.campaigns = find_campaigns(packages)
+        except Exception as exc:  # a broken tree must not take the scan with it
+            report.warnings.append(f"correlation skipped: {exc}")
+        else:
+            _note_correlation_scope(report, packages)
+    report.campaigns = ctx.campaigns
+
     checks = list(active_rules(online, policy.disable))
 
     for done, pkg in enumerate(packages, start=1):

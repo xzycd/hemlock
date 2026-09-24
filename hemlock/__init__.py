@@ -3,5 +3,5 @@
 Poison hemlock looks like wild parsley. That is the whole problem.
 """
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"
 __all__ = ["__version__"]

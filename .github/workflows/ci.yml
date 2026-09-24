@@ -44,6 +44,28 @@ jobs:
             echo "::error::hemlock did not flag the known-bad fixture"
             exit 1
           } || echo "fixture flagged as expected"
+      - name: correlation must still connect the fixture campaign
+        # The four packages behind this are individually low. If correlation
+        # regresses they go back to being low, the scan still fails on the
+        # other fixtures, and nobody notices for a release.
+        run: |
+          hemlock scan examples/compromised-app --format json --fail-on never > /tmp/scan.json
+          python - <<'EOF'
+          import json, sys
+          doc = json.load(open("/tmp/scan.json"))
+          campaigns = doc.get("campaigns") or []
+          if len(campaigns) != 1 or len(campaigns[0]["members"]) != 4:
+              sys.exit(f"::error::expected one campaign of four, got {campaigns}")
+          kinds = {link["kind"] for link in campaigns[0]["links"]}
+          if kinds != {"payload", "endpoint"}:
+              sys.exit(f"::error::expected payload and endpoint links, got {sorted(kinds)}")
+          scored = {r["name"]: r["severity"] for r in doc["results"]}
+          for member in campaigns[0]["members"]:
+              if scored.get(member["name"]) != "critical":
+                  sys.exit(f"::error::{member['name']} was not escalated by its campaign")
+          print("campaign detected and escalated as expected")
+          EOF
+
       - name: clean project must pass
         run: |
           mkdir -p /tmp/clean

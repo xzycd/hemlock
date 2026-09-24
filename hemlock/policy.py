@@ -40,6 +40,10 @@ class Ignore:
 class Policy:
     fail_on: str = "high"
     fresh_days: int = 14
+    # Whether packages are compared against each other as well as judged on
+    # their own. Off, the HEM8xx rules have nothing to read and go quiet;
+    # everything else behaves identically.
+    correlate: bool = True
     disable: set[str] = field(default_factory=set)
     ignores: list[Ignore] = field(default_factory=list)
     path: str | None = None
@@ -81,6 +85,10 @@ def load(root: str, explicit: str | None = None) -> Policy:
     if fresh_days < 0:
         raise PolicyError(f"{path}: fresh_days must be a non-negative integer")
 
+    correlate = doc.get("correlate", True)
+    if not isinstance(correlate, bool):
+        raise PolicyError(f"{path}: correlate must be true or false")
+
     disabled = doc.get("disable", [])
     if not isinstance(disabled, list) or not all(isinstance(rule, str) for rule in disabled):
         raise PolicyError(f"{path}: disable must be a list of rule ids")
@@ -88,6 +96,7 @@ def load(root: str, explicit: str | None = None) -> Policy:
     policy = Policy(
         fail_on=fail_on,
         fresh_days=fresh_days,
+        correlate=correlate,
         disable={rule.upper() for rule in disabled},
         path=path,
     )

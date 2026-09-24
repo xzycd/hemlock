@@ -135,7 +135,9 @@ def test_arithmetic_has_an_ascii_form():
 
 
 def test_headline_names_the_worst_finding(result):
-    assert fmt.headline(result) == "1 package reads credentials from an install script."
+    """A shared payload outranks everything but a malware record, because it
+    is the only headline that is about more than one package."""
+    assert fmt.headline(result) == "4 packages ship the same install payload as each other."
 
 
 def test_headline_agrees_with_its_count():
@@ -283,8 +285,8 @@ def test_rule_counts_match_the_readme():
     """The README quotes these numbers. Adding a rule should force an edit."""
     readme = open(os.path.join(os.path.dirname(__file__), "..", "README.md")).read()
     offline = [r for r in RULES.values() if not r.online]
-    assert (len(RULES), len(offline)) == (26, 15)
-    assert "The 26 rules" in readme and "Fifteen rules run offline" in readme
+    assert (len(RULES), len(offline)) == (29, 17)
+    assert "The 29 rules" in readme and "Seventeen rules run offline" in readme
 
 
 def test_only_reported_facts_are_certain():
