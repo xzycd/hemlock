@@ -28,7 +28,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["build==1.6.1", "pytest==9.2.0", "ruff==0.16.7"]
+dev = ["build==1.6.1", "pytest==9.2.0", "ruff==0.17.4"]
 
 [project.scripts]
 hemlock = "hemlock.cli:run"
