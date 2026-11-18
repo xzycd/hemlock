@@ -22,8 +22,9 @@ from .policy import Policy
 from .scan import Report, _stage, run_rules
 
 PARSERS = {
-    "package-lock.json": npm, "npm-shrinkwrap.json": npm, "yarn.lock": npm, "package.json": npm,
-    "poetry.lock": pypi, "Pipfile.lock": pypi, "pyproject.toml": pypi, "requirements.txt": pypi,
+    "package-lock.json": npm, "npm-shrinkwrap.json": npm, "pnpm-lock.yaml": npm, "yarn.lock": npm,
+    "package.json": npm,
+    "poetry.lock": pypi, "uv.lock": pypi, "Pipfile.lock": pypi, "pyproject.toml": pypi, "requirements.txt": pypi,
 }
 
 

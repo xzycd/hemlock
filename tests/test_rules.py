@@ -1,7 +1,7 @@
 import pytest
 
 from hemlock import rules as rules_mod
-from hemlock.data import POPULAR
+from hemlock.data import POPULAR, established
 from hemlock.model import Context, Package
 from hemlock.rules import (
     affix_impersonation,
@@ -102,6 +102,20 @@ class TestNearMiss:
     def test_ignores_very_short_names(self):
         assert not fires(near_miss, npm("ms"))
 
+    def test_two_edits_need_a_long_name_to_mean_anything(self):
+        assert not fires(near_miss, npm("ccxt"))  # two edits from "next", and half the name
+        assert fires(near_miss, npm("puppeterr"))
+        assert fires(near_miss, npm("typescrpit"))
+
+    @pytest.mark.parametrize("name", ["vitest", "nuxt", "preact", "@types/node", "source-map-js"])
+    def test_stands_down_for_names_in_wide_use(self, name):
+        assert not fires(near_miss, npm(name))
+        assert not fires(affix_impersonation, npm(name))
+
+    def test_a_scope_is_not_vouched_for_by_the_name_inside_it(self):
+        assert "@types/node" in established("npm")
+        assert fires(near_miss, npm("@someone/expres"))
+
     def test_ignores_unrelated_names(self):
         for name in ("my-internal-thing", "acme-widgets", "supercalifragilistic"):
             assert not fires(near_miss, npm(name)), name
@@ -159,7 +173,7 @@ def _brute_force_nearest(name, ecosystem):
     hits = []
     for target in POPULAR.get(ecosystem, frozenset()):
         d = edit_distance(name, target, cutoff=2)
-        if d and d <= 2 and abs(len(name) - len(target)) <= 2:
+        if d and d <= rules_mod._reach(name, target):
             hits.append((d, target))
     return min(hits) if hits else None
 

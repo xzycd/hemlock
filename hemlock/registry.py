@@ -86,15 +86,16 @@ class Registry:
             key=lambda v: times[v], reverse=True,
         )
 
-        if publisher := (entry.get("_npmUser") or {}).get("name"):
+        # A release pushed by trusted publishing carries the CI system where
+        # an account name would be, the same one on every package that uses
+        # it. That is a build pipeline, not a person who turned up, and whose
+        # pipeline it was is the question HEM602 answers.
+        if publisher := _account(entry):
             meta["publisher"] = publisher
         # Everyone who ever shipped an earlier release, not just the last few.
         # A co-maintainer who publishes every other version is not news; an
         # account that has never published this package before is.
-        meta["prior_publishers"] = sorted({
-            name for v in earlier
-            if (name := (versions[v].get("_npmUser") or {}).get("name"))
-        })
+        meta["prior_publishers"] = sorted({who for v in earlier if (who := _account(versions[v]))})
 
         dist = entry.get("dist") or {}
         if dist.get("unpackedSize"):
@@ -179,6 +180,12 @@ class Registry:
         if target and version:
             meta["provenance"] = pypi_provenance(normalize(name), version, target["filename"], self.http)
         return meta
+
+
+def _account(entry: dict) -> str | None:
+    """The npm account that uploaded a version, if an account did."""
+    user = entry.get("_npmUser") or {}
+    return None if user.get("trustedPublisher") else user.get("name")
 
 
 def _parse_time(value: str | None) -> datetime | None:
