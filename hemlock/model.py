@@ -71,6 +71,11 @@ class Rule:
     # rather than an inference of our own, so it settles the verdict alone
     # and skips the weighting entirely.
     certain: bool = False
+    # A background rule describes something true of a large share of honest
+    # packages: an install script, no attestation, a caret range. It adds
+    # weight to a package that has given another reason to look, and cannot
+    # be the reason itself. See score.py.
+    background: bool = False
     # One imperative line: what to do about it. Assigned from REMEDIES in
     # rules.py so the whole set can be read, and kept consistent, together.
     fix: str = ""
@@ -127,7 +132,7 @@ RULES: dict[str, Rule] = {}
 
 
 def rule(rid: str, *, title: str, category: str, weight: int, explain: str,
-         online: bool = False, certain: bool = False):
+         online: bool = False, certain: bool = False, background: bool = False):
     """Register a check. Yield one string per piece of evidence."""
 
     def register(fn):
@@ -135,7 +140,7 @@ def rule(rid: str, *, title: str, category: str, weight: int, explain: str,
             raise ValueError(f"duplicate rule id {rid}")
         if category not in CATEGORIES:
             raise ValueError(f"unknown category {category}")
-        RULES[rid] = Rule(rid, title, category, weight, dedent(explain).strip(), online, fn, certain)
+        RULES[rid] = Rule(rid, title, category, weight, dedent(explain).strip(), online, fn, certain, background)
         return fn
 
     return register

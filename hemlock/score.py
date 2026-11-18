@@ -1,6 +1,6 @@
 """Scoring.
 
-Three ideas, each deliberately simple enough to argue with.
+Four ideas, each deliberately simple enough to argue with.
 
 1. Every rule carries a weight, and the weights are grouped by category.
 
@@ -12,6 +12,15 @@ Three ideas, each deliberately simple enough to argue with.
 3. Across categories, agreement counts for more. A near-miss name that also
    runs an install hook that also ships obfuscated code is three independent
    reasons to worry, so the base gets a 25% bump per additional category.
+
+4. Background signals do not agree with each other. An install script, a
+   caret range, no attestation and a `new Function` are each true of a large
+   share of the registry, so finding three of them on one package is what
+   `rollup` looks like, not three reasons to worry. Beside any other finding
+   they count in full and corroborate it, because a near-miss name that also
+   runs an install script is exactly the case. With nothing else to back
+   up, the heaviest stands, the rest count at the same 40%, and there is no
+   bump.
 
 The arithmetic is printed under every result. If you disagree with a number,
 you can see which one to change.
@@ -47,11 +56,20 @@ def score_package(pkg: Package, findings: list[Finding]) -> Verdict:
         weights.sort(reverse=True)
         parts[category] = round(weights[0] + ECHO * sum(weights[1:]))
 
+    background = _background_only(findings)
+    if background:
+        heaviest = max(parts, key=lambda category: (parts[category], category))
+        parts = {c: score if c == heaviest else round(ECHO * score) for c, score in parts.items()}
+
     base = sum(parts.values())
-    multiplier = 1.0 + CORROBORATION * (len(parts) - 1)
+    multiplier = 1.0 if background else 1.0 + CORROBORATION * (len(parts) - 1)
     total = min(100, round(base * multiplier))
 
     return Verdict(pkg, ordered, total, base, multiplier, sorted(parts), parts)
+
+
+def _background_only(findings: list[Finding]) -> bool:
+    return all(f.rule.background for f in findings)
 
 
 def arithmetic(v: Verdict, unicode: bool = True) -> str:
@@ -63,7 +81,8 @@ def arithmetic(v: Verdict, unicode: bool = True) -> str:
         return "reported malicious, so no score was calculated"
     terms = " + ".join(f"{cat} {score}" for cat, score in sorted(v.parts.items(), key=lambda kv: -kv[1]))
     if v.multiplier == 1.0:
-        return f"{terms} {arrow} {v.score}"
+        alone = "  (background only)" if len(v.parts) > 1 and _background_only(v.findings) else ""
+        return f"{terms} {arrow} {v.score}{alone}"
     capped = " capped" if round(v.base * v.multiplier) > 100 else ""
     return (
         f"{terms} = {v.base}  {times}{v.multiplier:.2f} "

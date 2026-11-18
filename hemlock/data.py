@@ -4,7 +4,16 @@ The popular-package lists are the typosquat targets. They do not need to be
 exhaustive, because attackers imitate things people actually type, and the long
 tail of a registry is not worth impersonating. A few hundred names covers
 the realistic attack surface and keeps the check instant.
+
+The established names are the other half. A near miss is only worth
+reporting when the name is not itself something a million installs a week
+resolve to: `vitest` is two edits from `vite` and `nuxt` is one from `next`,
+and neither is anybody's typo. Those lists are long, come whole from public
+download data, and are refreshed by tools/known.py.
 """
+
+from functools import cache
+from pathlib import Path
 
 POPULAR_NPM = """
 lodash react react-dom react-native chalk debug express axios commander request
@@ -67,6 +76,18 @@ POPULAR = {
     "npm": _words(POPULAR_NPM),
     "pypi": _words(POPULAR_PYPI),
 }
+
+
+@cache
+def established(ecosystem: str) -> frozenset[str]:
+    """Names in wide enough use that the naming rules have nothing to say."""
+    listing = Path(__file__).parent / "known" / f"{ecosystem}.txt"
+    try:
+        lines = listing.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    return POPULAR.get(ecosystem, frozenset()) | {line for line in lines if line and not line.startswith("# ")}
+
 
 # Affixes attackers bolt onto a real name to look like an official variant.
 AFFIXES = {

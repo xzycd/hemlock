@@ -1,6 +1,6 @@
 """Reading the Python side of a project.
 
-requirements.txt, poetry.lock, Pipfile.lock and pyproject.toml. If a
+requirements.txt, poetry.lock, uv.lock, Pipfile.lock and pyproject.toml. If a
 virtualenv sits in the tree we also point each package at its installed
 source so the code-shape rules have something to read.
 """
@@ -15,7 +15,7 @@ import urllib.parse
 
 from .model import Package
 
-MANIFESTS = ["poetry.lock", "Pipfile.lock", "requirements.txt", "pyproject.toml"]
+MANIFESTS = ["poetry.lock", "uv.lock", "Pipfile.lock", "requirements.txt", "pyproject.toml"]
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", "dist", "build", ".tox", ".mypy_cache"}
 
 _REQ = re.compile(
@@ -51,6 +51,8 @@ def parse(path: str, root: str) -> list[Package]:
 
     if base == "poetry.lock":
         pkgs = _parse_poetry(raw, rel)
+    elif base == "uv.lock":
+        pkgs = _parse_uv(raw, rel)
     elif base == "Pipfile.lock":
         pkgs = _parse_pipfile(raw, rel)
     elif base == "pyproject.toml":
@@ -157,6 +159,54 @@ def _parse_poetry(raw: str, rel: str) -> list[Package]:
                 meta={"source": entry.get("source", {})},
             )
         )
+    return out
+
+
+# How uv writes a source that is this project or a member of its workspace,
+# as opposed to something fetched.
+_UV_LOCAL = ("editable", "virtual")
+_UV_DEP_TABLES = ("optional-dependencies", "dev-dependencies")
+
+
+def _parse_uv(raw: str, rel: str) -> list[Package]:
+    try:
+        doc = tomllib.loads(raw)
+    except tomllib.TOMLDecodeError:
+        return []
+    entries = [e for e in doc.get("package", []) if isinstance(e, dict)]
+
+    direct: set[str] = set()
+    for entry in entries:
+        if not any(k in (entry.get("source") or {}) for k in _UV_LOCAL):
+            continue
+        groups = [entry.get("dependencies") or []]
+        for table in _UV_DEP_TABLES:
+            groups.extend((entry.get(table) or {}).values())
+        direct |= {normalize(dep["name"]) for group in groups for dep in group if dep.get("name")}
+
+    out = []
+    for entry in entries:
+        source = entry.get("source") or {}
+        if any(k in source for k in _UV_LOCAL):
+            continue
+        name, version = entry.get("name", ""), entry.get("version")
+        pkg = Package(
+            ecosystem="pypi",
+            name=name,
+            version=version,
+            spec=f"=={version}" if version else None,
+            direct=normalize(name) in direct,
+            integrity="sha256" if entry.get("sdist") or entry.get("wheels") else None,
+            origin=rel,
+            meta={"source": source},
+        )
+        if vcs := source.get("git"):
+            pkg.resolved, pkg.meta["vcs"] = f"git+{vcs}", True
+        elif url := source.get("url"):
+            pkg.resolved = url
+        elif path := source.get("path") or source.get("directory"):
+            pkg.resolved = f"file:{path}"
+        out.append(pkg)
     return out
 
 

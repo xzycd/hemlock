@@ -22,7 +22,7 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 
 from .campaign import key_of
-from .data import AFFIXES, CREDENTIAL_PATHS, HOMOGLYPHS, POPULAR
+from .data import AFFIXES, CREDENTIAL_PATHS, HOMOGLYPHS, POPULAR, established
 from .model import RULES, Context, Package, rule
 from .provenance import describe
 from .pypi import normalize
@@ -63,11 +63,27 @@ def _bare(name: str) -> str:
     return name.split("/")[-1] if name.startswith("@") else name
 
 
+def _plain(pkg: Package) -> str:
+    name = _bare(pkg.name).lower()
+    return normalize(name) if pkg.ecosystem == "pypi" else name
+
+
+def _established(pkg: Package, plain: str) -> bool:
+    """Whether the registry's own download figures already vouch for the name.
+
+    A scoped package is looked up whole. `@types/node` is established;
+    `@someone/node` is not, and gets compared as the bare `node` it presents.
+    """
+    known = established(pkg.ecosystem)
+    return pkg.name.lower() in known if pkg.name.startswith("@") else plain in known
+
+
 # Corpus bucketed by name length, each entry carrying its set of characters.
 # Built once per ecosystem, on first use.
 _BUCKETS: dict[str, dict[int, list[tuple[str, frozenset]]]] = {}
 
 NEAR = 2  # how many edits still counts as a near miss
+LONG = 8  # and how long both names must be before the second edit does
 
 
 def _buckets(ecosystem: str) -> dict[int, list[tuple[str, frozenset]]]:
@@ -101,9 +117,19 @@ def nearest(name: str, ecosystem: str) -> tuple[int, str] | None:
             if len(chars - target_chars) > NEAR:
                 continue
             d = edit_distance(name, target, cutoff=NEAR)
-            if d and d <= NEAR and (best is None or (d, target) < best):
+            if d and d <= _reach(name, target) and (best is None or (d, target) < best):
                 best = (d, target)
     return best
+
+
+def _reach(name: str, target: str) -> int:
+    """How many edits still read as a slip rather than as a different word.
+
+    Two edits in a four letter name rewrite half of it: `ccxt` is that far
+    from `next`. A second edit only counts once both names are long enough
+    that the rest of them still match.
+    """
+    return NEAR if min(len(name), len(target)) >= LONG else 1
 
 
 @rule(
@@ -130,10 +156,8 @@ def nearest(name: str, ecosystem: str) -> tuple[int, str] | None:
     """,
 )
 def near_miss(pkg: Package, ctx: Context):
-    name = _bare(pkg.name).lower()
-    if pkg.ecosystem == "pypi":
-        name = normalize(name)
-    if name in POPULAR.get(pkg.ecosystem, frozenset()) or len(name) < 4:
+    name = _plain(pkg)
+    if _established(pkg, name) or len(name) < 4:
         return
     if hit := nearest(name, pkg.ecosystem):
         d, target = hit
@@ -161,10 +185,8 @@ def near_miss(pkg: Package, ctx: Context):
     """,
 )
 def affix_impersonation(pkg: Package, ctx: Context):
-    name = _bare(pkg.name).lower()
-    if pkg.ecosystem == "pypi":
-        name = normalize(name)
-    if name in POPULAR.get(pkg.ecosystem, frozenset()):
+    name = _plain(pkg)
+    if _established(pkg, name):
         return
     if hit := wearing_affix(name, pkg.ecosystem):
         stripped, affix = hit
@@ -265,7 +287,11 @@ def scope_drop(pkg: Package, ctx: Context):
 # install-time execution
 # --------------------------------------------------------------------------
 
-HOOK_KEYS = ("preinstall", "install", "postinstall", "prepare", "prepublish")
+HOOK_KEYS = ("preinstall", "install", "postinstall")
+# `prepare` is a build step. npm runs it for the project being worked on and
+# for a dependency fetched from git, never for a tarball from the registry,
+# where it has already run on the publisher's machine.
+GIT_HOOK_KEYS = (*HOOK_KEYS, "prepare")
 
 _FETCH_RUN = re.compile(
     r"(curl|wget|Invoke-WebRequest|iwr)\b[^\n|;]{0,200}[|;]\s*(sudo\s+)?(ba|z|d|)?sh\b"
@@ -285,7 +311,8 @@ _DECODE_EXEC = re.compile(
 
 
 def _hooks(pkg: Package) -> dict[str, str]:
-    return {k: v for k, v in pkg.scripts.items() if k in HOOK_KEYS}
+    keys = GIT_HOOK_KEYS if _off_registry(pkg) else HOOK_KEYS
+    return {k: v for k, v in pkg.scripts.items() if k in keys}
 
 
 @rule(
@@ -293,6 +320,7 @@ def _hooks(pkg: Package) -> dict[str, str]:
     title="Runs a script at install time",
     category="install",
     weight=18,
+    background=True,
     explain="""
     The package executes a command when it is installed, before any of your
     code imports it and before any test runs. `npm ci` in CI is enough to
@@ -502,6 +530,7 @@ def obfuscated_source(pkg: Package, ctx: Context):
     title="Builds code at runtime",
     category="code",
     weight=25,
+    background=True,
     explain="""
     The package assembles a string and executes it: `eval`, `new Function`,
     `exec` on something constructed rather than literal. Static analysis stops
@@ -535,6 +564,7 @@ def dynamic_eval(pkg: Package, ctx: Context):
     title="Version is not pinned",
     category="lockfile",
     weight=12,
+    background=True,
     explain="""
     The requirement accepts versions that do not exist yet. `*`, `latest` and
     an open-ended range all mean the same thing operationally: whatever the
@@ -574,7 +604,7 @@ def floating_version(pkg: Package, ctx: Context):
 )
 def missing_integrity(pkg: Package, ctx: Context):
     if pkg.version and not pkg.integrity and not pkg.meta.get("link") and pkg.origin.endswith(
-        ("package-lock.json", "npm-shrinkwrap.json", "Pipfile.lock")
+        ("package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "uv.lock", "Pipfile.lock")
     ):
         yield f"{pkg.coord} pinned without a hash"
 
@@ -891,6 +921,7 @@ PROVENANCE_EXPECTED_FROM = datetime(2025, 1, 1, tzinfo=UTC)
     title="Published without build provenance",
     category="provenance",
     weight=20,
+    background=True,
     online=True,
     explain="""
     The registry holds no attestation tying this release to a repository, a
